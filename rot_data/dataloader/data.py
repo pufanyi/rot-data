@@ -1,14 +1,15 @@
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
+from dataclasses import dataclass
 
 from PIL import Image
 
 
+@dataclass
 class Data:
-    def __init__(self, _id: str, images: list[Image.Image], label: str):
-        self.images = images
-        self.label = label
-        self._id = _id
+    images: list[Image.Image]
+    label: str
+    _id: str
 
 
 class DataLoader(ABC):
