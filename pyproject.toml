@@ -10,3 +10,8 @@ dependencies = [
     "loguru>=0.7.3",
     "pillow>=11.3.0",
 ]
+
+[dependency-groups]
+dev = [
+    "ty>=0.0.1a21",
+]

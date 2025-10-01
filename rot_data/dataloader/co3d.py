@@ -1,10 +1,9 @@
 import json
 import os
+import shutil
 import uuid
-from collections.abc import AsyncIterable
+from collections.abc import Iterable
 from pathlib import Path
-
-from anyio import Path as AnyioPath
 from loguru import logger
 
 from .data import Data, DataLoader
@@ -23,22 +22,22 @@ class CO3DDataLoader(DataLoader):
             self.links = json.load(f)
 
         self.num_frames = num_frames
-        self.cache_dir = AnyioPath(cache_dir)
+        self.cache_dir = Path(cache_dir).expanduser()
         self.num_threads = num_threads
 
-    async def _load_one(self, link: str, category: str) -> AsyncIterable[Data]:
+    def _load_one(self, link: str, category: str) -> Iterable[Data]:
         worker_folder = self.cache_dir / category / uuid.uuid4().hex
-        await worker_folder.mkdir(parents=True, exist_ok=True)
+        worker_folder.mkdir(parents=True, exist_ok=True)
         try:
             data_zip_path = worker_folder / "data.zip"
-            await download_file(link, data_zip_path)
-            await unzip_file(data_zip_path, worker_folder)
+            download_file(link, data_zip_path)
+            unzip_file(data_zip_path, worker_folder)
         except DownloadError as e:
             logger.error(f"Failed to download {link}: {e}")
             raise e
         finally:
-            await worker_folder.rmdir()
+            shutil.rmtree(worker_folder, ignore_errors=True)
 
-    async def load(self) -> AsyncIterable[Data]:
-        await self.cache_dir.mkdir(parents=True, exist_ok=True)
+    def load(self) -> Iterable[Data]:
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
         pass
