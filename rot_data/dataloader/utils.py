@@ -1,9 +1,9 @@
 import asyncio
 import os
-from pathlib import Path
 from typing import Final
 
 import aiohttp
+from anyio import Path
 
 CHUNK_SIZE: Final[int] = 1 << 16
 PART_EXTENSION: Final[str] = ".part"
@@ -52,12 +52,11 @@ async def _write_body(
 ) -> int:
     bytes_written = 0
     mode = "ab" if append else "wb"
-    with destination.open(mode) as file_obj:
+    async with await destination.open(mode) as file_obj:
         async for chunk in response.content.iter_chunked(CHUNK_SIZE):
             if not chunk:
                 continue
-            file_obj.write(chunk)
-            bytes_written += len(chunk)
+            bytes_written += await file_obj.write(chunk)
     return bytes_written
 
 
@@ -70,15 +69,15 @@ async def download_file(
 ) -> Path:
     """Download ``url`` to ``path`` with HTTP range resume support."""
 
-    target_path = Path(path).expanduser().absolute()
-    if target_path.exists() and target_path.is_dir():
-        raise DownloadError(f"Destination {target_path} is a directory")
+    target_path = await (await Path(path).expanduser()).absolute()
 
-    if target_path.exists():
+    if await target_path.exists():
+        if await target_path.is_dir():
+            raise DownloadError(f"Destination {target_path} is a directory")
         return target_path
 
     partial_path = target_path.parent / f"{target_path.name}{PART_EXTENSION}"
-    partial_path.parent.mkdir(parents=True, exist_ok=True)
+    await partial_path.parent.mkdir(parents=True, exist_ok=True)
 
     timeout_config = aiohttp.ClientTimeout(
         total=None, sock_connect=timeout, sock_read=timeout
@@ -89,7 +88,10 @@ async def download_file(
         timeout=timeout_config, raise_for_status=False
     ) as session:
         for attempt in range(1, num_retries + 1):
-            resume_from = partial_path.stat().st_size if partial_path.exists() else 0
+            partial_stat = None
+            if await partial_path.exists():
+                partial_stat = await partial_path.stat()
+            resume_from = partial_stat.st_size if partial_stat else 0
             headers = {"User-Agent": USER_AGENT}
             if resume_from:
                 headers["Range"] = f"bytes={resume_from}-"
@@ -98,7 +100,8 @@ async def download_file(
                 async with session.get(url, headers=headers) as response:
                     if response.status in {200, 206}:
                         if response.status == 200 and resume_from:
-                            partial_path.unlink(missing_ok=True)
+                            await partial_path.unlink(missing_ok=True)
+                            partial_stat = None
                             resume_from = 0
                         written = await _write_body(
                             response, partial_path, append=resume_from > 0
@@ -110,7 +113,7 @@ async def download_file(
                                 f"Connection closed early. Expected {expected_total} "
                                 f"bytes, got {total_so_far}."
                             )
-                        os.replace(partial_path, target_path)
+                        await partial_path.replace(target_path)
                         return target_path
 
                     if response.status == 416 and resume_from:
@@ -119,11 +122,12 @@ async def download_file(
                         )
                         if (
                             expected_total is not None
-                            and partial_path.stat().st_size >= expected_total
+                            and partial_stat is not None
+                            and partial_stat.st_size >= expected_total
                         ):
-                            os.replace(partial_path, target_path)
+                            await partial_path.replace(target_path)
                             return target_path
-                        partial_path.unlink(missing_ok=True)
+                        await partial_path.unlink(missing_ok=True)
                         raise _RetryableDownloadError(
                             "Server rejected range; restarting download"
                         )

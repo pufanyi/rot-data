@@ -1,9 +1,12 @@
 import json
 import os
 from collections.abc import AsyncIterable
-from pathlib import Path
+import uuid
+from loguru import logger
+from anyio import Path
 
 from .data import Data, DataLoader
+from .utils import DownloadError, download_file
 
 
 class CO3DDataLoader(DataLoader):
@@ -21,8 +24,17 @@ class CO3DDataLoader(DataLoader):
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.num_threads = num_threads
 
-    async def _load_one(self, link: str) -> AsyncIterable[Data]:
-        pass
+    async def _load_one(self, link: str, category: str) -> AsyncIterable[Data]:
+        worker_folder = self.cache_dir / category / uuid.uuid4().hex
+        worker_folder.mkdir(parents=True, exist_ok=True)
+        try:
+            await download_file(link, worker_folder / "data.zip")
+        except DownloadError as e:
+            logger.error(f"Failed to download {link}: {e}")
+            raise e
+        finally:
+            worker_folder.rmdir()
+
 
     async def load(self) -> AsyncIterable[Data]:
         pass
