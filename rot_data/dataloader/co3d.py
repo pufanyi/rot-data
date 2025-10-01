@@ -1,6 +1,6 @@
 import json
 import os
-from collections.abc import Iterable
+from collections.abc import AsyncIterable
 from pathlib import Path
 
 from .data import Data, DataLoader
@@ -21,5 +21,8 @@ class CO3DDataLoader(DataLoader):
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.num_threads = num_threads
 
-    def load(self) -> Iterable[Data]:
+    async def _load_one(self, link: str) -> AsyncIterable[Data]:
+        pass
+
+    async def load(self) -> AsyncIterable[Data]:
         pass

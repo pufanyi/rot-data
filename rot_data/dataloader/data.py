@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from collections.abc import Iterable
+from collections.abc import AsyncIterable
 from dataclasses import dataclass
 
 from PIL import Image
@@ -14,5 +14,5 @@ class Data:
 
 class DataLoader(ABC):
     @abstractmethod
-    def load(self, *args, **kwargs) -> Iterable[Data]:
+    async def load(self, *args, **kwargs) -> AsyncIterable[Data]:
         raise NotImplementedError
