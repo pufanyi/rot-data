@@ -8,7 +8,7 @@ from anyio import Path as AnyioPath
 from loguru import logger
 
 from .data import Data, DataLoader
-from .utils import DownloadError, download_file
+from .utils import DownloadError, download_file, unzip_file
 
 
 class CO3DDataLoader(DataLoader):
@@ -30,7 +30,9 @@ class CO3DDataLoader(DataLoader):
         worker_folder = self.cache_dir / category / uuid.uuid4().hex
         await worker_folder.mkdir(parents=True, exist_ok=True)
         try:
-            await download_file(link, worker_folder / "data.zip")
+            data_zip_path = worker_folder / "data.zip"
+            await download_file(link, data_zip_path)
+            await unzip_file(data_zip_path, worker_folder)
         except DownloadError as e:
             logger.error(f"Failed to download {link}: {e}")
             raise e
