@@ -3,7 +3,7 @@ import os
 from typing import Final
 
 import aiohttp
-from anyio import Path
+from anyio import Path as AnyioPath
 
 CHUNK_SIZE: Final[int] = 1 << 16
 PART_EXTENSION: Final[str] = ".part"
@@ -48,7 +48,7 @@ def _expected_total_size(
 
 
 async def _write_body(
-    response: aiohttp.ClientResponse, destination: Path, append: bool
+    response: aiohttp.ClientResponse, destination: AnyioPath, append: bool
 ) -> int:
     bytes_written = 0
     mode = "ab" if append else "wb"
@@ -66,10 +66,10 @@ class _RetryableDownloadError(Exception):
 
 async def download_file(
     url: str, path: str | os.PathLike, num_retries: int = 5, timeout: float = 10
-) -> Path:
+) -> AnyioPath:
     """Download ``url`` to ``path`` with HTTP range resume support."""
 
-    target_path = await (await Path(path).expanduser()).absolute()
+    target_path = await (await AnyioPath(path).expanduser()).absolute()
 
     if await target_path.exists():
         if await target_path.is_dir():
