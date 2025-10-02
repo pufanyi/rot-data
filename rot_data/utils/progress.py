@@ -14,6 +14,7 @@ from rich.progress import (
     Task,
     TaskID,
     TextColumn,
+    TimeElapsedColumn,
     TimeRemainingColumn,
 )
 from rich.text import Text
@@ -94,27 +95,6 @@ class SmartSpeedColumn(ProgressColumn):
         return f"{speed:.1f} TB/s"
 
 
-class SmartTimeRemainingColumn(ProgressColumn):
-    """Display time estimates with an ETA prefix for tasks that request it."""
-
-    def __init__(self) -> None:
-        self._base_column = TimeRemainingColumn()
-
-    def render(self, task: Task) -> Text:
-        base_render = self._base_column.render(task)
-        if not task.fields.get("show_eta", False):
-            return base_render
-
-        if task.time_remaining is None or base_render.plain.strip() in {
-            "?",
-            "",
-            "--:--",
-        }:
-            return Text("ETA --", style="progress.remaining")
-
-        return Text(f"ETA {base_render.plain}", style="progress.remaining")
-
-
 class ProgressManager:
     """
     Singleton manager for coordinating progress bars across threads.
@@ -166,7 +146,8 @@ class ProgressManager:
                 BarColumn(),
                 SmartProgressColumn(),
                 SmartSpeedColumn(),
-                SmartTimeRemainingColumn(),
+                TimeElapsedColumn(),
+                TimeRemainingColumn(),
             )
 
             with self._progress:
@@ -175,7 +156,6 @@ class ProgressManager:
                     self._overall_task_id = self._progress.add_task(
                         "[bold magenta]Overall Progress",
                         total=total_tasks,
-                        show_eta=True,
                     )
                 else:
                     self._overall_task_id = None
