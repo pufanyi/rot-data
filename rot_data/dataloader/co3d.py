@@ -2,6 +2,7 @@ import io
 import json
 import os
 import re
+import shutil
 from collections.abc import Iterable
 from pathlib import Path
 from random import randint
@@ -21,6 +22,7 @@ from rich.progress import (
 
 from ..utils.download import DownloadError, download_file
 from ..utils.extract import ZipReader
+from ..utils.logging import setup_logger
 from .data import Data, DataLoader
 
 
@@ -213,6 +215,12 @@ class CO3DDataLoader(DataLoader):
             logger.error(f"Failed to download {link}: {e}")
             raise e
 
+        finally:
+            # Clean up the worker folder and all its contents
+            if worker_folder.exists():
+                shutil.rmtree(worker_folder)
+                logger.debug(f"Cleaned up temporary folder: {worker_folder}")
+
     def load(self) -> Iterable[Data]:
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         link = "https://dl.fbaipublicfiles.com/co3dv2_231130/apple_006.zip"
@@ -221,6 +229,9 @@ class CO3DDataLoader(DataLoader):
 
 
 if __name__ == "__main__":
+    # Initialize logger with Rich handler to avoid conflicts with progress bars
+    setup_logger(level="INFO", use_rich=True)
+
     loader = CO3DDataLoader()
     for data in loader.load():
         print(data)
