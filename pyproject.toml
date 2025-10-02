@@ -8,6 +8,7 @@ dependencies = [
     "aiohttp>=3.12.15",
     "anyio>=4.11.0",
     "loguru>=0.7.3",
+    "numpy>=2.3.3",
     "pillow>=11.3.0",
     "rich>=14.1.0",
 ]

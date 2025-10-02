@@ -4,7 +4,9 @@ import os
 import re
 from collections.abc import Iterable
 from pathlib import Path
+from random import randint
 
+import numpy as np
 from loguru import logger
 from PIL import Image
 from rich.progress import (
@@ -22,21 +24,46 @@ from ..utils.extract import ZipReader
 from .data import Data, DataLoader
 
 
-def select_frames(frame_paths: list[Path], num_frames: int) -> list[Path]:
-    total_frames = len(frame_paths)
-    if total_frames == 0:
-        return []
-    if total_frames <= num_frames:
-        return frame_paths
+def select_frames[T](frame_list: list[T]) -> tuple[list[T], T]:
+    """
+    Select evenly spaced frames from a list.
 
-    indices = [int(i * total_frames / num_frames) for i in range(num_frames)]
-    return [frame_paths[i] for i in indices]
+    Args:
+        frame_list: List of frames (can be paths, tuples, or any type)
+
+    Returns:
+        List of selected frames with the same type as input
+    """
+    len_frames = len(frame_list)
+    num_frame_1_index = randint(0, len_frames - 1)
+    num_frame_2_index = num_frame_1_index + len_frames // 2
+
+    # Generate discrete probability distribution using normal distribution
+    mu = (num_frame_1_index + num_frame_2_index) / 2
+    sigma = (num_frame_2_index - num_frame_1_index) / 6
+
+    # Create array of all possible indices in range
+    indices = np.arange(num_frame_1_index, num_frame_2_index + 1)
+
+    # Calculate normal distribution probability density for each index
+    probabilities = np.exp(-0.5 * ((indices - mu) / sigma) ** 2)
+
+    # Normalize to sum to 1
+    probabilities = probabilities / probabilities.sum()
+
+    # Discrete sampling from the normalized distribution
+    result_frame_index = np.random.choice(indices, p=probabilities)
+
+    frame_1 = frame_list[num_frame_1_index]
+    frame_2 = frame_list[num_frame_2_index % len_frames]
+    predict_frame = frame_list[result_frame_index % len_frames]
+
+    return [frame_1, frame_2], predict_frame
 
 
 class CO3DDataLoader(DataLoader):
     def __init__(
         self,
-        num_frames: int = 6,
         cache_dir: str | os.PathLike = "cache",
         num_threads: int = 4,
     ):
@@ -44,7 +71,6 @@ class CO3DDataLoader(DataLoader):
         with self.links_file.open() as f:
             self.links = json.load(f)
 
-        self.num_frames = num_frames
         self.cache_dir = Path(cache_dir).expanduser()
         self.num_threads = num_threads
 
@@ -147,47 +173,36 @@ class CO3DDataLoader(DataLoader):
 
                     # Sort frames by name
                     frame_list.sort(key=lambda x: x[0])
-                    logger.debug(
-                        f"Object {entry_id}: found {len(frame_list)} frames, "
-                        f"selecting {self.num_frames}"
-                    )
+                    logger.debug(f"Object {entry_id}: found {len(frame_list)} frames")
 
-                    # Select frames
-                    selected_indices = [
-                        int(i * len(frame_list) / self.num_frames)
-                        for i in range(self.num_frames)
-                    ]
-                    selected_frames = [frame_list[i] for i in selected_indices]
+                    # Select frames using the select_frames function
+                    selected_frames, predict_frame = select_frames(frame_list)
 
                     # Now read only the selected frames
                     images = []
-                    with ZipReader(data_zip_path) as reader:
-                        for frame_name, pathname in selected_frames:
-                            try:
+                    try:
+                        with ZipReader(data_zip_path) as reader:
+                            for _frame_name, pathname in selected_frames:
                                 content = reader.read_file(pathname)
                                 img = Image.open(io.BytesIO(content))
                                 images.append(img.copy())
                                 img.close()
-                            except Exception as e:
-                                logger.error(
-                                    f"Failed to load image {frame_name} "
-                                    f"from {entry_id}: {e}"
-                                )
-                                continue
-
-                    if images:
-                        logger.debug(
-                            f"Successfully loaded {len(images)} images for {entry_id}"
-                        )
+                            _frame_name, pathname = predict_frame
+                            content = reader.read_file(pathname)
+                            img = Image.open(io.BytesIO(content))
+                            predict_image = img.copy()
+                            img.close()
                         yield Data(
                             images=images,
+                            predict_image=predict_image,
                             label=category,
                             _id=entry_id,
                         )
-                    else:
-                        logger.warning(f"No valid images loaded for ID {entry_id}")
+                    except Exception as e:
+                        logger.warning(f"No valid images loaded for ID {entry_id}: {e}")
 
-                    progress.update(task, advance=1)
+                    finally:
+                        progress.update(task, advance=1)
 
             logger.success(
                 f"Completed loading category '{category}': "

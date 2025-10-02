@@ -8,6 +8,7 @@ from PIL import Image
 @dataclass
 class Data:
     images: list[Image.Image]
+    predict_image: Image.Image
     label: str
     _id: str
 
