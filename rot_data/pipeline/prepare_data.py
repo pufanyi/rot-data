@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,7 @@ from loguru import logger
 
 from rot_data.dataloader.co3d import CO3DDataLoader
 from rot_data.dataloader.data import DataLoader
+from rot_data.taskboard.server import TaskBoardServer, start_server
 from rot_data.utils.logging import setup_logger
 
 LoaderFactory = Callable[..., DataLoader]
@@ -58,12 +60,51 @@ def prepare_dataset(
     num_threads: int = 32,
     push_to_hub: bool = True,
     num_proc: int = 32,
+    use_taskboard: bool = False,
+    taskboard_port: int = 8765,
 ) -> Dataset:
     """
     Build a Hugging Face dataset from the configured loader
     and optionally push it.
+    
+    Args:
+        dataset_name: Name of the dataset to load
+        repo_id: Target Hugging Face repo ID
+        cache_dir: Cache directory for intermediate artifacts
+        num_threads: Number of threads for data loading
+        push_to_hub: Whether to push to Hugging Face hub
+        num_proc: Number of processes for dataset processing
+        use_taskboard: Whether to enable task board visualization
+        taskboard_port: Port for the task board server
+    
+    Returns:
+        The prepared Dataset
     """
-    loader = get_loader(dataset_name, cache_dir=str(cache_dir), num_threads=num_threads)
+    server: TaskBoardServer | None = None
+    
+    # Start task board server if requested
+    if use_taskboard:
+        logger.info(f"Starting task board server at http://0.0.0.0:{taskboard_port}")
+        server = start_server(host="0.0.0.0", port=taskboard_port)
+        logger.success(f"Task board available at http://localhost:{taskboard_port}")
+        logger.info("Open the URL in your browser to view task progress")
+        time.sleep(2)  # Give server time to start
+        
+        # Force single process when taskboard is enabled to avoid serialization issues
+        if num_proc != 1:
+            logger.warning(
+                f"Taskboard is enabled. Forcing num_proc=1 (was {num_proc}) "
+                "to avoid serialization issues with WebSocket connections."
+            )
+            num_proc = 1
+    
+    # Create loader with task board enabled if requested
+    loader = get_loader(
+        dataset_name,
+        cache_dir=str(cache_dir),
+        num_threads=num_threads,
+        use_taskboard=use_taskboard,
+    )
 
     logger.info(f"Building Hugging Face dataset using '{dataset_name}' loader")
 
@@ -76,11 +117,18 @@ def prepare_dataset(
         }
     )
 
-    dataset = Dataset.from_generator(
-        lambda: iter_dataset_items(loader),
-        num_proc=num_proc,
-        features=features,
-    )
+    # When taskboard is enabled, collect all data first to avoid serialization issues
+    if use_taskboard:
+        logger.info("Collecting all data items (taskboard mode)...")
+        data_items = list(iter_dataset_items(loader))
+        logger.info(f"Collected {len(data_items)} items, creating dataset...")
+        dataset = Dataset.from_list(data_items, features=features)
+    else:
+        dataset = Dataset.from_generator(
+            lambda: iter_dataset_items(loader),
+            num_proc=num_proc,
+            features=features,
+        )
 
     logger.success(f"Dataset prepared with {dataset.num_rows} records")
 
@@ -90,6 +138,10 @@ def prepare_dataset(
         dataset.push_to_hub(target_repo)
         logger.success(f"Dataset pushed to '{target_repo}'")
 
+    # Cleanup task board server
+    if server:
+        logger.info("Task board server will remain active until you stop the program")
+    
     return dataset
 
 
@@ -136,6 +188,17 @@ def parse_args() -> argparse.Namespace:
         default="INFO",
         help="Logging level (e.g., INFO, DEBUG)",
     )
+    parser.add_argument(
+        "--use-taskboard",
+        action="store_true",
+        help="Enable task board visualization (opens web interface)",
+    )
+    parser.add_argument(
+        "--taskboard-port",
+        type=int,
+        default=8765,
+        help="Port for the task board server (default: 8765)",
+    )
     return parser.parse_args()
 
 
@@ -143,14 +206,28 @@ def main() -> None:
     args = parse_args()
     setup_logger(level=args.log_level)
 
-    prepare_dataset(
-        dataset_name=args.dataset_name,
-        repo_id=args.repo_id,
-        cache_dir=args.cache_dir,
-        num_threads=args.num_threads,
-        push_to_hub=not args.no_push,
-        num_proc=args.num_proc,
-    )
+    if args.use_taskboard:
+        logger.info("=" * 60)
+        logger.info("Task Board Enabled!")
+        logger.info(f"Open http://localhost:{args.taskboard_port} in your browser")
+        logger.info("=" * 60)
+
+    try:
+        prepare_dataset(
+            dataset_name=args.dataset_name,
+            repo_id=args.repo_id,
+            cache_dir=args.cache_dir,
+            num_threads=args.num_threads,
+            push_to_hub=not args.no_push,
+            num_proc=args.num_proc,
+            use_taskboard=args.use_taskboard,
+            taskboard_port=args.taskboard_port,
+        )
+    except KeyboardInterrupt:
+        logger.info("Interrupted by user")
+    finally:
+        if args.use_taskboard:
+            logger.info("Task board server stopped")
 
 
 if __name__ == "__main__":

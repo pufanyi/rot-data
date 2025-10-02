@@ -27,6 +27,7 @@ from datasets import (
 from loguru import logger
 from PIL import Image
 
+from ..taskboard.manager import get_task_board
 from ..utils.download import DownloadError, download_file
 from ..utils.extract import ZipReader
 from ..utils.logging import setup_logger
@@ -89,6 +90,7 @@ class CO3DDataLoader(DataLoader):
         self,
         cache_dir: str | os.PathLike = "cache",
         num_threads: int = 4,
+        use_taskboard: bool = False,
     ):
         self.links_file = Path(__file__).parents[1] / "links" / "co3d.json"
         with self.links_file.open() as f:
@@ -101,6 +103,8 @@ class CO3DDataLoader(DataLoader):
         )
         self.dataset_cache_root.mkdir(parents=True, exist_ok=True)
         self.num_threads = num_threads
+        self.use_taskboard = use_taskboard
+        self.taskboard = get_task_board() if use_taskboard else None
 
     def _subset_name(self, link: str) -> str:
         return Path(link).stem
@@ -174,8 +178,10 @@ class CO3DDataLoader(DataLoader):
                     _id=record["id"],
                 )
             except Exception as exc:
+                record_id = record.get("id", "<unknown>")
                 logger.warning(
-                    f"Skipping corrupted record '{record.get('id', '<unknown>')}' in subset '{subset_name}': {exc}",
+                    f"Skipping corrupted record '{record_id}' "
+                    f"in subset '{subset_name}': {exc}",
                 )
 
     def _build_subset_dataset(
@@ -186,7 +192,8 @@ class CO3DDataLoader(DataLoader):
         subset_cache_dir = self._subset_cache_dir(subset_name)
 
         logger.info(
-            f"Processing category '{category}' from {link} to build subset '{subset_name}'",
+            f"Processing category '{category}' from {link} "
+            f"to build subset '{subset_name}'",
         )
 
         manager = get_progress_manager()
@@ -308,14 +315,16 @@ class CO3DDataLoader(DataLoader):
                 if load_task is not None and manager.is_active:
                     manager.remove_task(load_task)
                 logger.success(
-                    f"Completed loading category '{category}': {len(records)} objects processed",
+                    f"Completed loading category '{category}': "
+                    f"{len(records)} objects processed",
                     category,
                     len(records),
                 )
 
             if not records:
                 logger.warning(
-                    f"No valid records collected for subset '{subset_name}' (category '{category}'). Skipping cache.",
+                    f"No valid records collected for subset '{subset_name}' "
+                    f"(category '{category}'). Skipping cache.",
                 )
                 return None
 
@@ -332,7 +341,8 @@ class CO3DDataLoader(DataLoader):
                 json.dumps(metadata, indent=2)
             )
             logger.success(
-                f"Cached subset '{subset_name}' with {len(records)} records at {subset_cache_dir}",
+                f"Cached subset '{subset_name}' with {len(records)} records "
+                f"at {subset_cache_dir}",
                 subset_name,
                 len(records),
                 subset_cache_dir,
@@ -385,7 +395,8 @@ class CO3DDataLoader(DataLoader):
                 token=token,
             )
             logger.success(
-                f"Subset '{subset_name}' pushed to '{repo_id}' as config '{subset_name}'",
+                f"Subset '{subset_name}' pushed to '{repo_id}' "
+                f"as config '{subset_name}'",
             )
 
     def load(self) -> Iterable[Data]:
@@ -401,23 +412,47 @@ class CO3DDataLoader(DataLoader):
         sentinel = object()
         manager = get_progress_manager()
 
-        def worker(job_category: str, job_link: str) -> None:
+        # Create tasks in task board
+        if self.taskboard:
+            for idx, (job_category, job_link) in enumerate(jobs):
+                task_id = f"load_{job_category}_{idx}"
+                task_name = f"{job_category} - {self._subset_name(job_link)}"
+                self.taskboard.add_task(
+                    task_id=task_id,
+                    name=task_name,
+                    metadata={"category": job_category, "link": job_link},
+                )
+
+        def worker(
+            job_category: str, job_link: str, task_id: str | None = None
+        ) -> None:
+            if task_id and self.taskboard:
+                self.taskboard.start_task(task_id)
+            
             try:
                 for data in self._load_one(job_link, job_category):
                     result_queue.put(data)
+                
+                if task_id and self.taskboard:
+                    self.taskboard.complete_task(task_id)
             except DownloadError as exc:
                 logger.error(f"Failed to load {job_link}: {exc}")
-            except Exception:
+                if task_id and self.taskboard:
+                    self.taskboard.fail_task(task_id, str(exc))
+            except Exception as e:
                 logger.exception(
                     f"Unexpected error while loading {job_category} from {job_link}"
                 )
+                if task_id and self.taskboard:
+                    self.taskboard.fail_task(task_id, str(e))
             finally:
                 result_queue.put(sentinel)
 
         with manager.managed_progress(total_tasks=len(jobs)):
             with ThreadPoolExecutor(max_workers=self.num_threads) as executor:
-                for job_category, job_link in jobs:
-                    executor.submit(worker, job_category, job_link)
+                for idx, (job_category, job_link) in enumerate(jobs):
+                    task_id = f"load_{job_category}_{idx}" if self.taskboard else None
+                    executor.submit(worker, job_category, job_link, task_id)
 
                 completed_jobs = 0
                 while completed_jobs < len(jobs):

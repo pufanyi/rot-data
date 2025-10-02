@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Task Board</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .header {
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+            margin-bottom: 20px;
+        }
+
+        .header h1 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 2em;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+
+        .stat-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+        }
+
+        .stat-card.pending { background: linear-gradient(135deg, #ffd89b 0%, #19547b 100%); }
+        .stat-card.running { background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); }
+        .stat-card.completed { background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%); }
+        .stat-card.failed { background: linear-gradient(135deg, #fa709a 0%, #fee140 100%); }
+        .stat-card.cancelled { background: linear-gradient(135deg, #a8c0ff 0%, #3f2b96 100%); }
+
+        .stat-card h3 {
+            font-size: 2em;
+            margin-bottom: 5px;
+        }
+
+        .stat-card p {
+            font-size: 0.9em;
+            opacity: 0.9;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .connection-status {
+            display: inline-block;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 0.9em;
+            font-weight: 500;
+        }
+
+        .connection-status.connected {
+            background: #43e97b;
+            color: white;
+        }
+
+        .connection-status.disconnected {
+            background: #fa709a;
+            color: white;
+        }
+
+        .tasks-container {
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+        }
+
+        .tasks-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .tasks-header h2 {
+            color: #333;
+        }
+
+        .filter-buttons {
+            display: flex;
+            gap: 10px;
+        }
+
+        .filter-btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 0.9em;
+            transition: all 0.3s;
+            background: #e0e0e0;
+            color: #333;
+        }
+
+        .filter-btn.active {
+            background: #667eea;
+            color: white;
+        }
+
+        .task-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+            gap: 15px;
+            max-height: 70vh;
+            overflow-y: auto;
+            padding: 10px;
+        }
+
+        .task-card {
+            background: #f8f9fa;
+            border-left: 4px solid #667eea;
+            padding: 20px;
+            border-radius: 8px;
+            transition: all 0.3s;
+        }
+
+        .task-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+        }
+
+        .task-card.pending { border-left-color: #ffd89b; }
+        .task-card.running { border-left-color: #4facfe; }
+        .task-card.completed { border-left-color: #43e97b; }
+        .task-card.failed { border-left-color: #fa709a; }
+        .task-card.cancelled { border-left-color: #a8c0ff; }
+
+        .task-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: start;
+            margin-bottom: 10px;
+        }
+
+        .task-name {
+            font-weight: 600;
+            color: #333;
+            font-size: 1em;
+            flex: 1;
+            word-break: break-word;
+        }
+
+        .task-status {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 0.75em;
+            font-weight: 600;
+            text-transform: uppercase;
+            margin-left: 10px;
+        }
+
+        .task-status.pending { background: #fff3cd; color: #856404; }
+        .task-status.running { background: #cfe2ff; color: #084298; }
+        .task-status.completed { background: #d1e7dd; color: #0f5132; }
+        .task-status.failed { background: #f8d7da; color: #842029; }
+        .task-status.cancelled { background: #e2e3e5; color: #41464b; }
+
+        .task-progress {
+            margin-top: 10px;
+        }
+
+        .progress-bar-container {
+            background: #e0e0e0;
+            height: 8px;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-bottom: 5px;
+        }
+
+        .progress-bar {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            transition: width 0.3s ease;
+        }
+
+        .progress-text {
+            font-size: 0.85em;
+            color: #666;
+        }
+
+        .task-meta {
+            margin-top: 10px;
+            font-size: 0.8em;
+            color: #666;
+        }
+
+        .task-error {
+            margin-top: 10px;
+            padding: 10px;
+            background: #f8d7da;
+            border-radius: 4px;
+            font-size: 0.85em;
+            color: #842029;
+        }
+
+        .no-tasks {
+            text-align: center;
+            padding: 60px 20px;
+            color: #666;
+        }
+
+        .no-tasks svg {
+            width: 80px;
+            height: 80px;
+            margin-bottom: 20px;
+            opacity: 0.3;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .running .progress-bar {
+            animation: pulse 2s ease-in-out infinite;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <h1>📊 Task Board</h1>
+                <span class="connection-status" id="connectionStatus">Connecting...</span>
+            </div>
+            <div class="stats" id="stats">
+                <!-- Stats will be populated dynamically -->
+            </div>
+        </div>
+
+        <div class="tasks-container">
+            <div class="tasks-header">
+                <h2>Tasks</h2>
+                <div class="filter-buttons">
+                    <button class="filter-btn active" data-filter="all">All</button>
+                    <button class="filter-btn" data-filter="pending">Pending</button>
+                    <button class="filter-btn" data-filter="running">Running</button>
+                    <button class="filter-btn" data-filter="completed">Completed</button>
+                    <button class="filter-btn" data-filter="failed">Failed</button>
+                </div>
+            </div>
+            <div class="task-grid" id="taskGrid">
+                <!-- Tasks will be populated dynamically -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let ws = null;
+        let currentFilter = 'all';
+        let tasksData = [];
+
+        function connect() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/ws`;
+            
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = () => {
+                console.log('WebSocket connected');
+                updateConnectionStatus(true);
+            };
+
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                if (data.type === 'ping') {
+                    ws.send('pong');
+                    return;
+                }
+                updateDashboard(data);
+            };
+
+            ws.onclose = () => {
+                console.log('WebSocket disconnected');
+                updateConnectionStatus(false);
+                setTimeout(connect, 3000);
+            };
+
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                updateConnectionStatus(false);
+            };
+        }
+
+        function updateConnectionStatus(connected) {
+            const statusEl = document.getElementById('connectionStatus');
+            statusEl.textContent = connected ? '🟢 Connected' : '🔴 Disconnected';
+            statusEl.className = `connection-status ${connected ? 'connected' : 'disconnected'}`;
+        }
+
+        function updateDashboard(data) {
+            tasksData = data.tasks || [];
+            updateStats(data);
+            updateTasks();
+        }
+
+        function updateStats(data) {
+            const statsEl = document.getElementById('stats');
+            const byStatus = data.by_status || {};
+            
+            statsEl.innerHTML = `
+                <div class="stat-card">
+                    <h3>${data.total || 0}</h3>
+                    <p>Total Tasks</p>
+                </div>
+                <div class="stat-card pending">
+                    <h3>${byStatus.pending || 0}</h3>
+                    <p>Pending</p>
+                </div>
+                <div class="stat-card running">
+                    <h3>${byStatus.running || 0}</h3>
+                    <p>Running</p>
+                </div>
+                <div class="stat-card completed">
+                    <h3>${byStatus.completed || 0}</h3>
+                    <p>Completed</p>
+                </div>
+                <div class="stat-card failed">
+                    <h3>${byStatus.failed || 0}</h3>
+                    <p>Failed</p>
+                </div>
+            `;
+        }
+
+        function updateTasks() {
+            const taskGridEl = document.getElementById('taskGrid');
+            const filteredTasks = currentFilter === 'all' 
+                ? tasksData 
+                : tasksData.filter(task => task.status === currentFilter);
+
+            if (filteredTasks.length === 0) {
+                taskGridEl.innerHTML = `
+                    <div class="no-tasks">
+                        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path>
+                        </svg>
+                        <h3>No tasks found</h3>
+                    </div>
+                `;
+                return;
+            }
+
+            taskGridEl.innerHTML = filteredTasks.map(task => {
+                const percentage = task.percentage || 0;
+                const progressText = task.total 
+                    ? `${task.progress.toFixed(0)} / ${task.total.toFixed(0)}`
+                    : `${task.progress.toFixed(0)}`;
+
+                return `
+                    <div class="task-card ${task.status}">
+                        <div class="task-header">
+                            <div class="task-name">${task.name}</div>
+                            <span class="task-status ${task.status}">${task.status}</span>
+                        </div>
+                        ${task.status === 'running' || task.status === 'completed' ? `
+                            <div class="task-progress">
+                                <div class="progress-bar-container">
+                                    <div class="progress-bar" style="width: ${percentage}%"></div>
+                                </div>
+                                <div class="progress-text">${progressText} (${percentage.toFixed(1)}%)</div>
+                            </div>
+                        ` : ''}
+                        ${task.error ? `
+                            <div class="task-error">
+                                <strong>Error:</strong> ${task.error}
+                            </div>
+                        ` : ''}
+                        <div class="task-meta">
+                            <div>ID: ${task.id}</div>
+                            ${task.start_time ? `<div>Started: ${new Date(task.start_time).toLocaleTimeString()}</div>` : ''}
+                            ${task.end_time ? `<div>Ended: ${new Date(task.end_time).toLocaleTimeString()}</div>` : ''}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        // Filter button handlers
+        document.querySelectorAll('.filter-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                currentFilter = btn.dataset.filter;
+                updateTasks();
+            });
+        });
+
+        // Initial connection
+        connect();
+    </script>
+</body>
+</html>
+
