@@ -90,6 +90,10 @@ class CO3DDataLoader(DataLoader):
         self,
         cache_dir: str | os.PathLike = "cache",
         num_threads: int = 4,
+        auto_push_to_hub: bool = True,
+        hub_repo_id: str | None = None,
+        hub_private: bool | None = None,
+        hub_token: str | None = None,
     ):
         self.links_file = Path(__file__).parents[1] / "links" / "co3d.json"
         with self.links_file.open() as f:
@@ -102,6 +106,12 @@ class CO3DDataLoader(DataLoader):
         )
         self.dataset_cache_root.mkdir(parents=True, exist_ok=True)
         self.num_threads = num_threads
+        
+        # Hub upload settings
+        self.auto_push_to_hub = auto_push_to_hub
+        self.hub_repo_id = hub_repo_id or DATASET_REPO_ID
+        self.hub_private = hub_private
+        self.hub_token = hub_token
 
     def _subset_name(self, link: str) -> str:
         return Path(link).stem
@@ -338,6 +348,29 @@ class CO3DDataLoader(DataLoader):
                 f"Cached subset '{subset_name}' with {len(records)} records "
                 f"at {subset_cache_dir}",
             )
+            
+            # Auto push to hub if enabled
+            if self.auto_push_to_hub:
+                try:
+                    logger.info(
+                        f"Pushing subset '{subset_name}' to hub '{self.hub_repo_id}'",
+                    )
+                    dataset.push_to_hub(
+                        self.hub_repo_id,
+                        config_name=subset_name,
+                        private=self.hub_private,
+                        token=self.hub_token,
+                    )
+                    logger.success(
+                        f"Subset '{subset_name}' successfully pushed to "
+                        f"'{self.hub_repo_id}' as config '{subset_name}'",
+                    )
+                except Exception as exc:
+                    logger.error(
+                        f"Failed to push subset '{subset_name}' to hub: {exc}",
+                    )
+                    # Don't fail the entire process if push fails
+            
             return dataset
         except DownloadError as exc:
             logger.error(f"Failed to download {link}: {exc}")
