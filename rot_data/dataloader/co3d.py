@@ -8,8 +8,21 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from queue import Queue
 from random import randint
+from typing import Any
 
 import numpy as np
+from datasets import (
+    Dataset,
+    Features,
+    Value,
+    load_from_disk,
+)
+from datasets import (
+    Image as HFImage,
+)
+from datasets import (
+    Sequence as HFSequence,
+)
 from loguru import logger
 from PIL import Image
 
@@ -19,6 +32,15 @@ from ..utils.logging import setup_logger
 from ..utils.progress import get_progress_manager
 from .data import Data, DataLoader
 
+DATASET_REPO_ID = "pufanyi/co3d-subsets"
+SUBSET_FEATURES = Features(
+    {
+        "id": Value("string"),
+        "label": Value("string"),
+        "images": HFSequence(feature=HFImage()),
+        "predict_image": HFImage(),
+    }
+)
 
 def select_frames[T](frame_list: list[T]) -> tuple[list[T], T]:
     """
@@ -68,29 +90,104 @@ class CO3DDataLoader(DataLoader):
             self.links = json.load(f)
 
         self.cache_dir = Path(cache_dir).expanduser()
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.dataset_cache_root = (
+            self.cache_dir / "datasets" / DATASET_REPO_ID.replace("/", "__")
+        )
+        self.dataset_cache_root.mkdir(parents=True, exist_ok=True)
         self.num_threads = num_threads
 
-    def _load_one(self, link: str, category: str) -> Iterable[Data]:
-        task_name = link.split("/")[-1].split(".")[0]
-        worker_folder = self.cache_dir / task_name
-        worker_folder.mkdir(parents=True, exist_ok=True)
+    def _subset_name(self, link: str) -> str:
+        return Path(link).stem
 
-        logger.info(f"Processing category '{category}' from {link}")
+    def _subset_cache_dir(self, subset_name: str) -> Path:
+        return self.dataset_cache_root / subset_name
+
+    def _load_subset_from_cache(self, subset_name: str) -> Dataset | None:
+        subset_dir = self._subset_cache_dir(subset_name)
+        if not subset_dir.exists():
+            return None
+        try:
+            return load_from_disk(str(subset_dir))
+        except (FileNotFoundError, PermissionError, ValueError) as exc:
+            logger.warning(
+                f"Failed to load cached subset '{subset_name}': {exc}. Rebuilding.",
+            )
+            shutil.rmtree(subset_dir, ignore_errors=True)
+            return None
+
+    @staticmethod
+    def _ensure_pil_image(image: Any) -> Image.Image:
+        if isinstance(image, Image.Image):
+            return image.copy()
+        if isinstance(image, dict):
+            path = image.get("path")
+            if path:
+                with Image.open(path) as pil_image:
+                    return pil_image.copy()
+            image_bytes = image.get("bytes")
+            if image_bytes is not None:
+                with Image.open(io.BytesIO(image_bytes)) as pil_image:
+                    return pil_image.copy()
+        if isinstance(image, (bytes, bytearray)):
+            with Image.open(io.BytesIO(image)) as pil_image:
+                return pil_image.copy()
+        raise TypeError(f"Unsupported image payload type: {type(image)!r}")
+
+    def _load_one(self, link: str, category: str) -> Iterable[Data]:
+        subset_name = self._subset_name(link)
+        dataset = self._load_subset_from_cache(subset_name)
+        if dataset is None:
+            dataset = self._build_subset_dataset(link, category, subset_name)
+        else:
+            logger.info(
+                f"Using cached subset '{subset_name}' for category '{category}'",
+            )
+
+        if dataset is None:
+            return
+
+        for record in dataset:
+            try:
+                images = [self._ensure_pil_image(image) for image in record["images"]]
+                predict_image = self._ensure_pil_image(record["predict_image"])
+                yield Data(
+                    images=images,
+                    predict_image=predict_image,
+                    label=record["label"],
+                    _id=record["id"],
+                )
+            except Exception as exc:
+                logger.warning(
+                    f"Skipping corrupted record '{record.get('id', '<unknown>')}' in subset '{subset_name}': {exc}",
+                )
+
+    def _build_subset_dataset(
+        self, link: str, category: str, subset_name: str
+    ) -> Dataset | None:
+        worker_folder = self.cache_dir / subset_name
+        worker_folder.mkdir(parents=True, exist_ok=True)
+        subset_cache_dir = self._subset_cache_dir(subset_name)
+
+        logger.info(
+            f"Processing category '{category}' from {link} to build subset '{subset_name}'",
+        )
+
+        manager = get_progress_manager()
+        records: list[dict[str, Any]] = []
 
         try:
             data_zip_path = worker_folder / "data.zip"
-            # Use category and task name for clearer progress display
-            download_file(link, data_zip_path, description=f"{category} ({task_name})")
+            download_file(
+                link,
+                data_zip_path,
+                description=f"{category} ({subset_name})",
+            )
 
-            # Read ZIP archive directly without extraction
-            logger.info(f"Reading archive {task_name}")
-            # Match common image formats: jpg, jpeg, png, bmp, gif, webp, tiff, etc.
+            logger.info(f"Reading archive {subset_name}")
             frame_pattern = re.compile(r"^(.+)/([^/]+)/images/(frame\d+\.\w+)$")
-            data_groups: dict[str, dict[str, list[tuple[str, bytes]]]] = {}
+            data_groups: dict[str, dict[str, list[tuple[str, str]]]] = {}
 
-            manager = get_progress_manager()
-
-            # First pass: count total entries
             logger.debug("Counting archive entries...")
             with ZipReader(data_zip_path) as reader:
                 all_entries = reader.list_entries()
@@ -98,11 +195,13 @@ class CO3DDataLoader(DataLoader):
 
             logger.debug(f"Found {total_entries} files in archive")
 
-            # Second pass: read and group data
-            task = None
+            read_task = None
             if manager.is_active:
-                task = manager.add_task(
-                    f"[cyan]Reading {task_name} data",
+                read_task = manager.add_task(
+                    f"[cyan]Reading {subset_name} data",
+                    category,
+                    link,
+                    subset_name,
                     total=total_entries,
                 )
 
@@ -112,10 +211,9 @@ class CO3DDataLoader(DataLoader):
                     if not entry.is_file:
                         continue
 
-                    if task is not None and manager.is_active:
-                        manager.update(task, advance=1)
+                    if read_task is not None and manager.is_active:
+                        manager.update(read_task, advance=1)
 
-                    # Match pattern: category/id/images/frame*.<ext>
                     match = frame_pattern.match(entry.pathname)
                     if not match:
                         continue
@@ -125,101 +223,128 @@ class CO3DDataLoader(DataLoader):
                         continue
 
                     files_matched += 1
-                    # Store entry reference instead of reading content now
-                    # Group by category and id
-                    if entry_category not in data_groups:
-                        data_groups[entry_category] = {}
-                    if entry_id not in data_groups[entry_category]:
-                        data_groups[entry_category][entry_id] = []
-
-                    data_groups[entry_category][entry_id].append(
+                    entry_groups = data_groups.setdefault(entry_category, {})
+                    entry_groups.setdefault(entry_id, []).append(
                         (frame_name, entry.pathname)
                     )
 
-            if task is not None and manager.is_active:
-                manager.remove_task(task)
+            if read_task is not None and manager.is_active:
+                manager.remove_task(read_task)
             logger.info(f"Matched {files_matched} frame files for {link}")
 
-            # Process grouped data
-            if category not in data_groups:
+            object_ids = sorted(data_groups.get(category, {}))
+            if not object_ids:
                 logger.warning(f"Category {category} not found in {link}")
-                return
+            else:
+                load_task = None
+                if manager.is_active:
+                    load_task = manager.add_task(
+                        f"[green]Loading {category} objects",
+                        category,
+                        link,
+                        subset_name,
+                        total=len(object_ids),
+                    )
 
-            num_objects = len(data_groups[category])
-            logger.info(f"Processing {num_objects} objects in category '{category}'")
+                with ZipReader(data_zip_path) as reader:
+                    for entry_id in object_ids:
+                        frame_list = data_groups[category][entry_id]
 
-            task = None
-            if manager.is_active:
-                task = manager.add_task(
-                    f"[green]Loading {category} objects",
-                    total=num_objects,
+                        if not frame_list:
+                            logger.warning(f"No frames found for ID {entry_id}")
+                            if load_task is not None and manager.is_active:
+                                manager.update(load_task, advance=1)
+                            continue
+
+                        frame_list.sort(key=lambda item: item[0])
+                        logger.debug(
+                            f"Object {entry_id}: found {len(frame_list)} frames",
+                            entry_id,
+                            len(frame_list),
+                        )
+
+                        selected_frames, predict_frame = select_frames(frame_list)
+
+                        try:
+                            images = []
+                            for _frame_name, pathname in selected_frames:
+                                content = reader.read_file(pathname)
+                                with Image.open(io.BytesIO(content)) as img:
+                                    images.append(img.copy())
+
+                            _frame_name, pathname = predict_frame
+                            content = reader.read_file(pathname)
+                            with Image.open(io.BytesIO(content)) as img:
+                                predict_image = img.copy()
+
+                            records.append(
+                                {
+                                    "id": entry_id,
+                                    "label": category,
+                                    "images": images,
+                                    "predict_image": predict_image,
+                                }
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                f"No valid images loaded for ID {entry_id}: {exc}",
+                                entry_id,
+                                exc,
+                            )
+                        finally:
+                            if load_task is not None and manager.is_active:
+                                manager.update(load_task, advance=1)
+
+                if load_task is not None and manager.is_active:
+                    manager.remove_task(load_task)
+                logger.success(
+                    f"Completed loading category '{category}': {len(records)} objects processed",
+                    category,
+                    len(records),
                 )
 
-            # Open ZIP file once for all objects
-            with ZipReader(data_zip_path) as reader:
-                for entry_id in sorted(data_groups[category].keys()):
-                    frame_list = data_groups[category][entry_id]
+            if subset_cache_dir.exists():
+                shutil.rmtree(subset_cache_dir)
 
-                    if not frame_list:
-                        logger.warning(f"No frames found for ID {entry_id}")
-                        if task is not None and manager.is_active:
-                            manager.update(task, advance=1)
-                        continue
+            if records:
+                dataset = Dataset.from_list(records, features=SUBSET_FEATURES)
+            else:
+                logger.warning(
+                    f"No valid records collected for subset '{subset_name}' (category '{category}').",
+                    subset_name,
+                    category,
+                )
+                empty_columns = {name: [] for name in SUBSET_FEATURES}  # type: ignore[assignment]
+                dataset = Dataset.from_dict(empty_columns, features=SUBSET_FEATURES)
 
-                    # Sort frames by name
-                    frame_list.sort(key=lambda x: x[0])
-                    logger.debug(f"Object {entry_id}: found {len(frame_list)} frames")
+            dataset.save_to_disk(str(subset_cache_dir))
 
-                    # Select frames using the select_frames function
-                    selected_frames, predict_frame = select_frames(frame_list)
-
-                    # Now read only the selected frames
-                    images = []
-                    try:
-                        for _frame_name, pathname in selected_frames:
-                            content = reader.read_file(pathname)
-                            img = Image.open(io.BytesIO(content))
-                            images.append(img.copy())
-                            img.close()
-                        _frame_name, pathname = predict_frame
-                        content = reader.read_file(pathname)
-                        img = Image.open(io.BytesIO(content))
-                        predict_image = img.copy()
-                        img.close()
-                        yield Data(
-                            images=images,
-                            predict_image=predict_image,
-                            label=category,
-                            _id=entry_id,
-                        )
-                    except Exception as e:
-                        logger.warning(f"No valid images loaded for ID {entry_id}: {e}")
-
-                    finally:
-                        if task is not None and manager.is_active:
-                            manager.update(task, advance=1)
-
-            if task is not None and manager.is_active:
-                manager.remove_task(task)
-
-            logger.success(
-                f"Completed loading category '{category}': "
-                f"{num_objects} objects processed"
+            metadata = {
+                "category": category,
+                "link": link,
+                "repo_id": DATASET_REPO_ID,
+                "num_records": len(records),
+            }
+            (subset_cache_dir / "metadata.json").write_text(
+                json.dumps(metadata, indent=2)
             )
-
-        except DownloadError as e:
-            logger.error(f"Failed to download {link}: {e}")
-            raise e
-
+            logger.success(
+                "Cached subset '%s' with %d records at %s",
+                subset_name,
+                len(records),
+                subset_cache_dir,
+            )
+            return dataset
+        except DownloadError as exc:
+            logger.error("Failed to download %s: %s", link, exc)
+            raise
         finally:
-            # Clean up the worker folder and all its contents
             if worker_folder.exists():
                 shutil.rmtree(worker_folder)
-                logger.debug(f"Cleaned up temporary folder: {worker_folder}")
+                logger.debug("Cleaned up temporary folder: %s", worker_folder)
 
-    def load(self) -> Iterable[Data]:
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
 
+    def _collect_jobs(self) -> list[tuple[str, str]]:
         jobs: list[tuple[str, str]] = []
         for categories in self.links.values():
             if not isinstance(categories, dict):
@@ -229,6 +354,44 @@ class CO3DDataLoader(DataLoader):
                     continue
                 for link in links:
                     jobs.append((category, link))
+        return jobs
+
+    def iter_subset_datasets(self) -> Iterable[tuple[str, Dataset]]:
+        for category, link in self._collect_jobs():
+            subset_name = self._subset_name(link)
+            dataset = self._load_subset_from_cache(subset_name)
+            if dataset is None:
+                dataset = self._build_subset_dataset(link, category, subset_name)
+            if dataset is None:
+                continue
+            yield subset_name, dataset
+
+    def push_subsets_to_hub(
+        self,
+        repo_id: str = DATASET_REPO_ID,
+        *,
+        private: bool | None = None,
+        token: str | None = None,
+    ) -> None:
+        for subset_name, dataset in self.iter_subset_datasets():
+            logger.info("Pushing subset '%s' to '%s'", subset_name, repo_id)
+            dataset.push_to_hub(
+                repo_id,
+                config_name=subset_name,
+                private=private,
+                token=token,
+            )
+            logger.success(
+                "Subset '%s' pushed to '%s' as config '%s'",
+                subset_name,
+                repo_id,
+                subset_name,
+            )
+
+    def load(self) -> Iterable[Data]:
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+
+        jobs = self._collect_jobs()
 
         if not jobs:
             logger.warning("No CO3D links available to load")
