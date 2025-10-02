@@ -12,19 +12,11 @@ from random import randint
 import numpy as np
 from loguru import logger
 from PIL import Image
-from rich.progress import (
-    BarColumn,
-    MofNCompleteColumn,
-    Progress,
-    SpinnerColumn,
-    TextColumn,
-    TimeElapsedColumn,
-    TimeRemainingColumn,
-)
 
 from ..utils.download import DownloadError, download_file
 from ..utils.extract import ZipReader
 from ..utils.logging import setup_logger
+from ..utils.progress import get_progress_manager
 from .data import Data, DataLoader
 
 
@@ -79,71 +71,73 @@ class CO3DDataLoader(DataLoader):
         self.num_threads = num_threads
 
     def _load_one(self, link: str, category: str) -> Iterable[Data]:
-        worker_folder = self.cache_dir / category / link.split("/")[-1].split(".")[0]
+        task_name = link.split("/")[-1].split(".")[0]
+        worker_folder = self.cache_dir / task_name
         worker_folder.mkdir(parents=True, exist_ok=True)
 
         logger.info(f"Processing category '{category}' from {link}")
 
         try:
             data_zip_path = worker_folder / "data.zip"
-            download_file(link, data_zip_path)
+            # Use category and task name for clearer progress display
+            download_file(link, data_zip_path, description=f"{category} ({task_name})")
 
             # Read ZIP archive directly without extraction
-            logger.info(f"Reading archive {data_zip_path.name} without extraction")
-            frame_pattern = re.compile(r"^(.+)/([^/]+)/images/(frame\d+\.jpg)$")
+            logger.info(f"Reading archive {task_name}")
+            # Match common image formats: jpg, jpeg, png, bmp, gif, webp, tiff, etc.
+            frame_pattern = re.compile(r"^(.+)/([^/]+)/images/(frame\d+\.\w+)$")
             data_groups: dict[str, dict[str, list[tuple[str, bytes]]]] = {}
 
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[bold blue]{task.description}"),
-                BarColumn(),
-                MofNCompleteColumn(),
-                TimeElapsedColumn(),
-                TimeRemainingColumn(),
-            ) as progress:
-                # First pass: count total entries
-                logger.debug("Counting archive entries...")
-                with ZipReader(data_zip_path) as reader:
-                    all_entries = reader.list_entries()
-                    total_entries = sum(1 for entry in all_entries if entry.is_file)
+            manager = get_progress_manager()
+            
+            # First pass: count total entries
+            logger.debug("Counting archive entries...")
+            with ZipReader(data_zip_path) as reader:
+                all_entries = reader.list_entries()
+                total_entries = sum(1 for entry in all_entries if entry.is_file)
 
-                logger.debug(f"Found {total_entries} files in archive")
+            logger.debug(f"Found {total_entries} files in archive")
 
-                # Second pass: read and group data
-                task = progress.add_task(
-                    f"[cyan]Reading {link} data from archive",
+            # Second pass: read and group data
+            task = None
+            if manager.is_active:
+                task = manager.add_task(
+                    f"[cyan]Reading {task_name} data",
                     total=total_entries,
                 )
 
-                files_matched = 0
-                with ZipReader(data_zip_path) as reader:
-                    for entry in all_entries:
-                        if not entry.is_file:
-                            continue
+            files_matched = 0
+            with ZipReader(data_zip_path) as reader:
+                for entry in all_entries:
+                    if not entry.is_file:
+                        continue
 
-                        progress.update(task, advance=1)
+                    if task is not None and manager.is_active:
+                        manager.update(task, advance=1)
 
-                        # Match pattern: category/id/images/frame*.jpg
-                        match = frame_pattern.match(entry.pathname)
-                        if not match:
-                            continue
+                    # Match pattern: category/id/images/frame*.<ext>
+                    match = frame_pattern.match(entry.pathname)
+                    if not match:
+                        continue
 
-                        entry_category, entry_id, frame_name = match.groups()
-                        if entry_category != category:
-                            continue
+                    entry_category, entry_id, frame_name = match.groups()
+                    if entry_category != category:
+                        continue
 
-                        files_matched += 1
-                        # Store entry reference instead of reading content now
-                        # Group by category and id
-                        if entry_category not in data_groups:
-                            data_groups[entry_category] = {}
-                        if entry_id not in data_groups[entry_category]:
-                            data_groups[entry_category][entry_id] = []
+                    files_matched += 1
+                    # Store entry reference instead of reading content now
+                    # Group by category and id
+                    if entry_category not in data_groups:
+                        data_groups[entry_category] = {}
+                    if entry_id not in data_groups[entry_category]:
+                        data_groups[entry_category][entry_id] = []
 
-                        data_groups[entry_category][entry_id].append(
-                            (frame_name, entry.pathname)
-                        )
+                    data_groups[entry_category][entry_id].append(
+                        (frame_name, entry.pathname)
+                    )
 
+            if task is not None and manager.is_active:
+                manager.remove_task(task)
             logger.info(f"Matched {files_matched} frame files for {link}")
 
             # Process grouped data
@@ -154,60 +148,59 @@ class CO3DDataLoader(DataLoader):
             num_objects = len(data_groups[category])
             logger.info(f"Processing {num_objects} objects in category '{category}'")
 
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[bold green]{task.description}"),
-                BarColumn(),
-                MofNCompleteColumn(),
-                TimeElapsedColumn(),
-                TimeRemainingColumn(),
-            ) as progress:
-                task = progress.add_task(
+            task = None
+            if manager.is_active:
+                task = manager.add_task(
                     f"[green]Loading {category} objects",
                     total=num_objects,
                 )
 
-                # Open ZIP file once for all objects
-                with ZipReader(data_zip_path) as reader:
-                    for entry_id in sorted(data_groups[category].keys()):
-                        frame_list = data_groups[category][entry_id]
+            # Open ZIP file once for all objects
+            with ZipReader(data_zip_path) as reader:
+                for entry_id in sorted(data_groups[category].keys()):
+                    frame_list = data_groups[category][entry_id]
 
-                        if not frame_list:
-                            logger.warning(f"No frames found for ID {entry_id}")
-                            progress.update(task, advance=1)
-                            continue
+                    if not frame_list:
+                        logger.warning(f"No frames found for ID {entry_id}")
+                        if task is not None and manager.is_active:
+                            manager.update(task, advance=1)
+                        continue
 
-                        # Sort frames by name
-                        frame_list.sort(key=lambda x: x[0])
-                        logger.debug(f"Object {entry_id}: found {len(frame_list)} frames")
+                    # Sort frames by name
+                    frame_list.sort(key=lambda x: x[0])
+                    logger.debug(f"Object {entry_id}: found {len(frame_list)} frames")
 
-                        # Select frames using the select_frames function
-                        selected_frames, predict_frame = select_frames(frame_list)
+                    # Select frames using the select_frames function
+                    selected_frames, predict_frame = select_frames(frame_list)
 
-                        # Now read only the selected frames
-                        images = []
-                        try:
-                            for _frame_name, pathname in selected_frames:
-                                content = reader.read_file(pathname)
-                                img = Image.open(io.BytesIO(content))
-                                images.append(img.copy())
-                                img.close()
-                            _frame_name, pathname = predict_frame
+                    # Now read only the selected frames
+                    images = []
+                    try:
+                        for _frame_name, pathname in selected_frames:
                             content = reader.read_file(pathname)
                             img = Image.open(io.BytesIO(content))
-                            predict_image = img.copy()
+                            images.append(img.copy())
                             img.close()
-                            yield Data(
-                                images=images,
-                                predict_image=predict_image,
-                                label=category,
-                                _id=entry_id,
-                            )
-                        except Exception as e:
-                            logger.warning(f"No valid images loaded for ID {entry_id}: {e}")
+                        _frame_name, pathname = predict_frame
+                        content = reader.read_file(pathname)
+                        img = Image.open(io.BytesIO(content))
+                        predict_image = img.copy()
+                        img.close()
+                        yield Data(
+                            images=images,
+                            predict_image=predict_image,
+                            label=category,
+                            _id=entry_id,
+                        )
+                    except Exception as e:
+                        logger.warning(f"No valid images loaded for ID {entry_id}: {e}")
 
-                        finally:
-                            progress.update(task, advance=1)
+                    finally:
+                        if task is not None and manager.is_active:
+                            manager.update(task, advance=1)
+
+            if task is not None and manager.is_active:
+                manager.remove_task(task)
 
             logger.success(
                 f"Completed loading category '{category}': "
@@ -243,6 +236,7 @@ class CO3DDataLoader(DataLoader):
 
         result_queue: Queue[Data | object] = Queue()
         sentinel = object()
+        manager = get_progress_manager()
 
         def worker(job_category: str, job_link: str) -> None:
             try:
@@ -257,17 +251,19 @@ class CO3DDataLoader(DataLoader):
             finally:
                 result_queue.put(sentinel)
 
-        with ThreadPoolExecutor(max_workers=self.num_threads) as executor:
-            for job_category, job_link in jobs:
-                executor.submit(worker, job_category, job_link)
+        with manager.managed_progress(total_tasks=len(jobs)):
+            with ThreadPoolExecutor(max_workers=self.num_threads) as executor:
+                for job_category, job_link in jobs:
+                    executor.submit(worker, job_category, job_link)
 
-            completed_jobs = 0
-            while completed_jobs < len(jobs):
-                item = result_queue.get()
-                if item is sentinel:
-                    completed_jobs += 1
-                    continue
-                yield item
+                completed_jobs = 0
+                while completed_jobs < len(jobs):
+                    item = result_queue.get()
+                    if item is sentinel:
+                        completed_jobs += 1
+                        manager.advance_overall()
+                        continue
+                    yield item
 
 
 if __name__ == "__main__":
