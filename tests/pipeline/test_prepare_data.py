@@ -43,7 +43,9 @@ def test_prepare_dataset_writes_metadata_and_images(tmp_path: Path) -> None:
 
     metadata_path = tmp_path / "metadata.jsonl"
     assert metadata_path.exists()
-    metadata_entries = [json.loads(line) for line in metadata_path.read_text().splitlines()]
+    metadata_entries = [
+        json.loads(line) for line in metadata_path.read_text().splitlines()
+    ]
     assert metadata_entries[0]["id"] == "sample-id"
 
     for relative_path in sample.context_images + [sample.predict_image]:

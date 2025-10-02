@@ -1,10 +1,11 @@
 """Tools to prepare datasets and push them to Hugging Face."""
+
 from __future__ import annotations
 
 import argparse
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from loguru import logger
 
@@ -17,7 +18,8 @@ try:
 except ImportError as exc:  # pragma: no cover - import guard for optional dependency
     raise ImportError(
         "The 'datasets' package is required to prepare and upload datasets. "
-        "Install it with `uv add datasets huggingface_hub` or your preferred package manager."
+        "Install it with `uv add datasets huggingface_hub` or your preferred "
+        "package manager."
     ) from exc
 
 
@@ -65,7 +67,10 @@ def prepare_dataset(
     num_threads: int = 4,
     push_to_hub: bool = True,
 ) -> Dataset:
-    """Build a Hugging Face dataset from the configured loader and optionally push it."""
+    """
+    Build a Hugging Face dataset from the configured loader
+    and optionally push it.
+    """
     loader = get_loader(dataset_name, cache_dir=str(cache_dir), num_threads=num_threads)
 
     logger.info("Building Hugging Face dataset using '%s' loader", dataset_name)
@@ -97,7 +102,9 @@ def prepare_dataset(
 
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments for dataset preparation."""
-    parser = argparse.ArgumentParser(description="Prepare datasets and push to Hugging Face")
+    parser = argparse.ArgumentParser(
+        description="Prepare datasets and push to Hugging Face"
+    )
     parser.add_argument(
         "--dataset-name",
         default="co3d",
