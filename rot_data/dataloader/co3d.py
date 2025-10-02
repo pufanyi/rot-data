@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from queue import Queue
 from random import randint
+from threading import Lock
 from typing import Any
 
 import numpy as np
@@ -80,6 +81,10 @@ def select_frames[T](frame_list: list[T]) -> tuple[list[T], T]:
 
 
 class CO3DDataLoader(DataLoader):
+    # Class-level lock to serialize HuggingFace dataset loading
+    # This prevents nested ThreadPoolExecutor conflicts
+    _hf_load_lock = Lock()
+
     def __init__(
         self,
         cache_dir: str | os.PathLike = "cache",
@@ -108,13 +113,24 @@ class CO3DDataLoader(DataLoader):
         if not subset_dir.exists():
             return None
         try:
-            return load_from_disk(str(subset_dir))
+            # Use lock to prevent nested ThreadPoolExecutor conflicts
+            # when load_from_disk is called from multiple worker threads
+            with self._hf_load_lock:
+                return load_from_disk(str(subset_dir))
         except (FileNotFoundError, PermissionError, ValueError) as exc:
             logger.warning(
                 f"Failed to load cached subset '{subset_name}': {exc}. Rebuilding.",
             )
             shutil.rmtree(subset_dir, ignore_errors=True)
             return None
+        except RuntimeError as exc:
+            if "cannot schedule new futures" in str(exc):
+                logger.error(
+                    f"ThreadPool conflict when loading '{subset_name}': {exc}. "
+                    "This may indicate interpreter shutdown or nested executor issue.",
+                )
+                return None
+            raise
 
     @staticmethod
     def _ensure_pil_image(image: Any) -> Image.Image:
@@ -199,9 +215,6 @@ class CO3DDataLoader(DataLoader):
             if manager.is_active:
                 read_task = manager.add_task(
                     f"[cyan]Reading {subset_name} data",
-                    category,
-                    link,
-                    subset_name,
                     total=total_entries,
                 )
 
@@ -240,9 +253,6 @@ class CO3DDataLoader(DataLoader):
                 if manager.is_active:
                     load_task = manager.add_task(
                         f"[green]Loading {category} objects",
-                        category,
-                        link,
-                        subset_name,
                         total=len(object_ids),
                     )
 
@@ -303,20 +313,13 @@ class CO3DDataLoader(DataLoader):
                     len(records),
                 )
 
-            if subset_cache_dir.exists():
-                shutil.rmtree(subset_cache_dir)
-
-            if records:
-                dataset = Dataset.from_list(records, features=SUBSET_FEATURES)
-            else:
+            if not records:
                 logger.warning(
-                    f"No valid records collected for subset '{subset_name}' (category '{category}').",
-                    subset_name,
-                    category,
+                    f"No valid records collected for subset '{subset_name}' (category '{category}'). Skipping cache.",
                 )
-                empty_columns = {name: [] for name in SUBSET_FEATURES}  # type: ignore[assignment]
-                dataset = Dataset.from_dict(empty_columns, features=SUBSET_FEATURES)
+                return None
 
+            dataset = Dataset.from_list(records, features=SUBSET_FEATURES)
             dataset.save_to_disk(str(subset_cache_dir))
 
             metadata = {
@@ -329,19 +332,19 @@ class CO3DDataLoader(DataLoader):
                 json.dumps(metadata, indent=2)
             )
             logger.success(
-                "Cached subset '%s' with %d records at %s",
+                f"Cached subset '{subset_name}' with {len(records)} records at {subset_cache_dir}",
                 subset_name,
                 len(records),
                 subset_cache_dir,
             )
             return dataset
         except DownloadError as exc:
-            logger.error("Failed to download %s: %s", link, exc)
+            logger.error(f"Failed to download {link}: {exc}")
             raise
         finally:
             if worker_folder.exists():
                 shutil.rmtree(worker_folder)
-                logger.debug("Cleaned up temporary folder: %s", worker_folder)
+                logger.debug(f"Cleaned up temporary folder: {worker_folder}")
 
 
     def _collect_jobs(self) -> list[tuple[str, str]]:
@@ -374,7 +377,7 @@ class CO3DDataLoader(DataLoader):
         token: str | None = None,
     ) -> None:
         for subset_name, dataset in self.iter_subset_datasets():
-            logger.info("Pushing subset '%s' to '%s'", subset_name, repo_id)
+            logger.info(f"Pushing subset '{subset_name}' to '{repo_id}'")
             dataset.push_to_hub(
                 repo_id,
                 config_name=subset_name,
@@ -382,10 +385,7 @@ class CO3DDataLoader(DataLoader):
                 token=token,
             )
             logger.success(
-                "Subset '%s' pushed to '%s' as config '%s'",
-                subset_name,
-                repo_id,
-                subset_name,
+                f"Subset '{subset_name}' pushed to '{repo_id}' as config '{subset_name}'",
             )
 
     def load(self) -> Iterable[Data]:
@@ -402,7 +402,6 @@ class CO3DDataLoader(DataLoader):
         manager = get_progress_manager()
 
         def worker(job_category: str, job_link: str) -> None:
-            print(f"job_category: {job_category}, job_link: {job_link}")
             try:
                 for data in self._load_one(job_link, job_category):
                     result_queue.put(data)

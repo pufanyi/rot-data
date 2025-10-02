@@ -55,9 +55,9 @@ def prepare_dataset(
     *,
     repo_id: str | None = None,
     cache_dir: str | Path = "cache",
-    num_threads: int = 16,
+    num_threads: int = 32,
     push_to_hub: bool = True,
-    num_proc: int = 16,
+    num_proc: int = 32,
 ) -> Dataset:
     """
     Build a Hugging Face dataset from the configured loader
@@ -65,7 +65,7 @@ def prepare_dataset(
     """
     loader = get_loader(dataset_name, cache_dir=str(cache_dir), num_threads=num_threads)
 
-    logger.info("Building Hugging Face dataset using '%s' loader", dataset_name)
+    logger.info(f"Building Hugging Face dataset using '{dataset_name}' loader")
 
     features = Features(
         {
@@ -82,7 +82,7 @@ def prepare_dataset(
         features=features,
     )
 
-    logger.success("Dataset prepared with %d records", dataset.num_rows)
+    logger.success(f"Dataset prepared with {dataset.num_rows} records")
 
     if push_to_hub:
         target_repo = repo_id or f"pufanyi/{dataset_name}"
@@ -117,13 +117,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--num-threads",
         type=int,
-        default=16,
+        default=32,
         help="Number of threads for data loading",
     )
     parser.add_argument(
         "--num-proc",
         type=int,
-        default=16,
+        default=32,
         help="Number of processes for dataset processing",
     )
     parser.add_argument(

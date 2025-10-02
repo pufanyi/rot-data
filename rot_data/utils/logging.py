@@ -4,7 +4,6 @@ import sys
 from pathlib import Path
 
 from loguru import logger
-from rich.console import Console
 from rich.logging import RichHandler
 
 
@@ -29,10 +28,13 @@ def setup_logger(
     logger.remove()
 
     if use_rich:
-        # Use Rich handler for better compatibility with Rich progress bars
-        console = Console(stderr=True)
+        # Import here to avoid circular dependency
+        from .progress import get_progress_manager
+        
+        # Use the shared console from ProgressManager for better compatibility
+        manager = get_progress_manager()
         rich_handler = RichHandler(
-            console=console,
+            console=manager.console,
             rich_tracebacks=True,
             tracebacks_show_locals=True,
             show_time=True,

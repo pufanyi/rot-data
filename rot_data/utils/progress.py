@@ -6,6 +6,7 @@ import threading
 from contextlib import contextmanager
 from typing import Any
 
+from rich.console import Console
 from rich.progress import (
     BarColumn,
     Progress,
@@ -121,6 +122,7 @@ class ProgressManager:
         self._progress: Progress | None = None
         self._overall_task_id: TaskID | None = None
         self._active = False
+        self._console = Console(stderr=True)
 
     @contextmanager
     def managed_progress(self, total_tasks: int | None = None):
@@ -148,6 +150,7 @@ class ProgressManager:
                 SmartSpeedColumn(),
                 TimeElapsedColumn(),
                 TimeRemainingColumn(),
+                console=self._console,
             )
 
             with self._progress:
@@ -210,6 +213,11 @@ class ProgressManager:
     def is_active(self) -> bool:
         """Check if the progress manager is currently active."""
         return self._active
+
+    @property
+    def console(self) -> Console:
+        """Get the shared console instance."""
+        return self._console
 
 
 # Global instance accessor
