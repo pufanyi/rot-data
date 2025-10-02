@@ -9,13 +9,13 @@ from urllib import error, request
 
 from loguru import logger
 from rich.progress import (
-    Progress,
-    SpinnerColumn,
     BarColumn,
     DownloadColumn,
-    TransferSpeedColumn,
-    TimeRemainingColumn,
+    Progress,
+    SpinnerColumn,
     TextColumn,
+    TimeRemainingColumn,
+    TransferSpeedColumn,
 )
 
 CHUNK_SIZE: Final[int] = 1 << 16
@@ -134,7 +134,8 @@ def download_file(
                     if status not in {200, 206}:
                         body_snippet = _decode_snippet(response.read(200))
                         raise DownloadError(
-                            f"Unexpected status {status} while downloading {url}: {body_snippet}"
+                            f"Unexpected status {status} while downloading {url}: "
+                            f"{body_snippet}"
                         )
 
                     if status == 200 and resume_from:
@@ -145,7 +146,7 @@ def download_file(
                     expected_total = _expected_total_size(
                         response.headers, status, resume_from
                     )
-                    
+
                     task_id = progress.add_task(
                         f"[cyan]Downloading {target_path.name}",
                         total=expected_total if expected_total else None,
@@ -153,14 +154,18 @@ def download_file(
                     )
 
                     written = _write_body(
-                        response, partial_path, append=resume_from > 0, progress=progress, task_id=task_id
+                        response,
+                        partial_path,
+                        append=resume_from > 0,
+                        progress=progress,
+                        task_id=task_id,
                     )
-                    
+
                     total_so_far = resume_from + written
                     if expected_total is not None and total_so_far < expected_total:
                         raise _RetryableDownloadError(
-                            f"Connection closed early. Expected {expected_total} bytes, "
-                            f"got {total_so_far}."
+                            f"Connection closed early. Expected {expected_total} "
+                            f"bytes, got {total_so_far}."
                         )
 
                     partial_path.replace(target_path)
@@ -188,21 +193,32 @@ def download_file(
                     error_to_raise = _RetryableDownloadError(
                         "Server rejected range; restarting download"
                     )
-                    logger.warning(f"Retry attempt {attempt}/{num_retries}: Range rejected, restarting")
+                    logger.warning(
+                        f"Retry attempt {attempt}/{num_retries}: Range rejected, "
+                        f"restarting"
+                    )
                 elif 500 <= status < 600:
                     error_to_raise = _RetryableDownloadError(
                         f"Server returned {status} while downloading {url}"
                     )
-                    logger.warning(f"Retry attempt {attempt}/{num_retries}: Server error {status}")
+                    logger.warning(
+                        f"Retry attempt {attempt}/{num_retries}: Server error {status}"
+                    )
                 else:
                     body_snippet = _decode_snippet(http_error.read()[:200])
-                    logger.error(f"Download failed with status {status}: {body_snippet}")
+                    logger.error(
+                        f"Download failed with status {status}: {body_snippet}"
+                    )
                     raise DownloadError(
-                        f"Unexpected status {status} while downloading {url}: {body_snippet}"
+                        f"Unexpected status {status} while downloading {url}: "
+                        f"{body_snippet}"
                     ) from http_error
             except (error.URLError, TimeoutError, OSError) as network_error:
                 error_to_raise = network_error
-                logger.warning(f"Retry attempt {attempt}/{num_retries}: Network error - {network_error}")
+                logger.warning(
+                    f"Retry attempt {attempt}/{num_retries}: "
+                    f"Network error - {network_error}"
+                )
             else:
                 continue
 
@@ -218,9 +234,7 @@ def download_file(
     raise DownloadError(f"Failed to download {url} after {num_retries} attempts")
 
 
-def unzip_file(
-    archive_path: str | os.PathLike, destination: str | os.PathLike
-) -> Path:
+def unzip_file(archive_path: str | os.PathLike, destination: str | os.PathLike) -> Path:
     """Extract ``archive_path`` into ``destination`` and return the extracted path."""
 
     archive = Path(archive_path).expanduser().resolve()
@@ -235,13 +249,13 @@ def unzip_file(
     with zipfile.ZipFile(archive) as zip_file:
         members = zip_file.infolist()
         total_files = len(members)
-        
+
         # Security check
         for member in members:
             resolved_member = (output_dir / member.filename).resolve()
             if not resolved_member.is_relative_to(output_dir):
                 raise DownloadError("Archive contains unsafe paths outside destination")
-        
+
         # Extract with progress
         with Progress(
             SpinnerColumn(),
@@ -254,10 +268,12 @@ def unzip_file(
                 f"[green]Extracting {archive.name}",
                 total=total_files,
             )
-            
+
             for member in members:
                 zip_file.extract(member, output_dir)
                 progress.update(task_id, advance=1)
 
-    logger.success(f"Extraction completed: {total_files} files extracted to {output_dir}")
+    logger.success(
+        f"Extraction completed: {total_files} files extracted to {output_dir}"
+    )
     return output_dir
