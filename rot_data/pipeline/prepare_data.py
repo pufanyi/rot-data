@@ -66,6 +66,7 @@ def prepare_dataset(
     cache_dir: str | Path = "cache",
     num_threads: int = 4,
     push_to_hub: bool = True,
+    num_proc: int = 8,
 ) -> Dataset:
     """
     Build a Hugging Face dataset from the configured loader
@@ -86,6 +87,7 @@ def prepare_dataset(
 
     dataset = Dataset.from_generator(
         lambda: iter_dataset_items(loader),
+        num_proc=num_proc,
         features=features,
     )
 

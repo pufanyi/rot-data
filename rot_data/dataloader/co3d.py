@@ -167,25 +167,26 @@ class CO3DDataLoader(DataLoader):
                     total=num_objects,
                 )
 
-                for entry_id in sorted(data_groups[category].keys()):
-                    frame_list = data_groups[category][entry_id]
+                # Open ZIP file once for all objects
+                with ZipReader(data_zip_path) as reader:
+                    for entry_id in sorted(data_groups[category].keys()):
+                        frame_list = data_groups[category][entry_id]
 
-                    if not frame_list:
-                        logger.warning(f"No frames found for ID {entry_id}")
-                        progress.update(task, advance=1)
-                        continue
+                        if not frame_list:
+                            logger.warning(f"No frames found for ID {entry_id}")
+                            progress.update(task, advance=1)
+                            continue
 
-                    # Sort frames by name
-                    frame_list.sort(key=lambda x: x[0])
-                    logger.debug(f"Object {entry_id}: found {len(frame_list)} frames")
+                        # Sort frames by name
+                        frame_list.sort(key=lambda x: x[0])
+                        logger.debug(f"Object {entry_id}: found {len(frame_list)} frames")
 
-                    # Select frames using the select_frames function
-                    selected_frames, predict_frame = select_frames(frame_list)
+                        # Select frames using the select_frames function
+                        selected_frames, predict_frame = select_frames(frame_list)
 
-                    # Now read only the selected frames
-                    images = []
-                    try:
-                        with ZipReader(data_zip_path) as reader:
+                        # Now read only the selected frames
+                        images = []
+                        try:
                             for _frame_name, pathname in selected_frames:
                                 content = reader.read_file(pathname)
                                 img = Image.open(io.BytesIO(content))
@@ -196,17 +197,17 @@ class CO3DDataLoader(DataLoader):
                             img = Image.open(io.BytesIO(content))
                             predict_image = img.copy()
                             img.close()
-                        yield Data(
-                            images=images,
-                            predict_image=predict_image,
-                            label=category,
-                            _id=entry_id,
-                        )
-                    except Exception as e:
-                        logger.warning(f"No valid images loaded for ID {entry_id}: {e}")
+                            yield Data(
+                                images=images,
+                                predict_image=predict_image,
+                                label=category,
+                                _id=entry_id,
+                            )
+                        except Exception as e:
+                            logger.warning(f"No valid images loaded for ID {entry_id}: {e}")
 
-                    finally:
-                        progress.update(task, advance=1)
+                        finally:
+                            progress.update(task, advance=1)
 
             logger.success(
                 f"Completed loading category '{category}': "
