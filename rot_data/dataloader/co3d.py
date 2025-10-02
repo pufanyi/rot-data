@@ -51,9 +51,9 @@ class CO3DDataLoader(DataLoader):
     def _load_one(self, link: str, category: str) -> Iterable[Data]:
         worker_folder = self.cache_dir / category / link.split("/")[-1].split(".")[0]
         worker_folder.mkdir(parents=True, exist_ok=True)
-        
+
         logger.info(f"Processing category '{category}' from {link}")
-        
+
         try:
             data_zip_path = worker_folder / "data.zip"
             download_file(link, data_zip_path)
@@ -76,15 +76,15 @@ class CO3DDataLoader(DataLoader):
                 with ZipReader(data_zip_path) as reader:
                     all_entries = reader.list_entries()
                     total_entries = sum(1 for entry in all_entries if entry.is_file)
-                
+
                 logger.debug(f"Found {total_entries} files in archive")
-                
+
                 # Second pass: read and group data
                 task = progress.add_task(
                     f"[cyan]Reading {link} data from archive",
                     total=total_entries,
                 )
-                
+
                 files_matched = 0
                 with ZipReader(data_zip_path) as reader:
                     for entry in all_entries:
@@ -116,9 +116,7 @@ class CO3DDataLoader(DataLoader):
                             (frame_name, content)
                         )
 
-            logger.info(
-                f"Matched {files_matched} frame files for {link}"
-            )
+            logger.info(f"Matched {files_matched} frame files for {link}")
 
             # Process grouped data
             if category not in data_groups:
