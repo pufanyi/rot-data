@@ -103,9 +103,7 @@ class CO3DDataLoader(DataLoader):
                             continue
 
                         files_matched += 1
-                        # Read file content into memory
-                        content = reader.read_file(entry.pathname)
-
+                        # Store entry reference instead of reading content now
                         # Group by category and id
                         if entry_category not in data_groups:
                             data_groups[entry_category] = {}
@@ -113,7 +111,7 @@ class CO3DDataLoader(DataLoader):
                             data_groups[entry_category][entry_id] = []
 
                         data_groups[entry_category][entry_id].append(
-                            (frame_name, content)
+                            (frame_name, entry.pathname)
                         )
 
             logger.info(f"Matched {files_matched} frame files for {link}")
@@ -161,18 +159,21 @@ class CO3DDataLoader(DataLoader):
                     ]
                     selected_frames = [frame_list[i] for i in selected_indices]
 
+                    # Now read only the selected frames
                     images = []
-                    for frame_name, content in selected_frames:
-                        try:
-                            img = Image.open(io.BytesIO(content))
-                            images.append(img.copy())
-                            img.close()
-                        except Exception as e:
-                            logger.error(
-                                f"Failed to load image {frame_name} "
-                                f"from {entry_id}: {e}"
-                            )
-                            continue
+                    with ZipReader(data_zip_path) as reader:
+                        for frame_name, pathname in selected_frames:
+                            try:
+                                content = reader.read_file(pathname)
+                                img = Image.open(io.BytesIO(content))
+                                images.append(img.copy())
+                                img.close()
+                            except Exception as e:
+                                logger.error(
+                                    f"Failed to load image {frame_name} "
+                                    f"from {entry_id}: {e}"
+                                )
+                                continue
 
                     if images:
                         logger.debug(
