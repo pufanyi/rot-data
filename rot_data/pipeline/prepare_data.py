@@ -55,9 +55,9 @@ def prepare_dataset(
     *,
     repo_id: str | None = None,
     cache_dir: str | Path = "cache",
-    num_threads: int = 4,
+    num_threads: int = 8,
     push_to_hub: bool = True,
-    num_proc: int = 8,
+    num_proc: int = 16,
 ) -> Dataset:
     """
     Build a Hugging Face dataset from the configured loader
@@ -117,8 +117,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--num-threads",
         type=int,
-        default=4,
+        default=8,
         help="Number of threads for data loading",
+    )
+    parser.add_argument(
+        "--num-proc",
+        type=int,
+        default=16,
+        help="Number of processes for dataset processing",
     )
     parser.add_argument(
         "--no-push",
@@ -143,6 +149,7 @@ def main() -> None:
         cache_dir=args.cache_dir,
         num_threads=args.num_threads,
         push_to_hub=not args.no_push,
+        num_proc=args.num_proc,
     )
 
 
