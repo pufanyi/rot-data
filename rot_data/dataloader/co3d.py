@@ -5,7 +5,6 @@ import re
 from collections.abc import Iterable
 from pathlib import Path
 
-import libarchive
 from loguru import logger
 from PIL import Image
 from rich.progress import (
@@ -15,10 +14,12 @@ from rich.progress import (
     SpinnerColumn,
     TextColumn,
     TimeElapsedColumn,
+    TimeRemainingColumn,
 )
 
-from .data import Data, DataLoader
 from ..utils.download import DownloadError, download_file
+from ..utils.extract import ZipReader
+from .data import Data, DataLoader
 
 
 def select_frames(frame_paths: list[Path], num_frames: int) -> list[Path]:
@@ -68,27 +69,26 @@ class CO3DDataLoader(DataLoader):
                 BarColumn(),
                 MofNCompleteColumn(),
                 TimeElapsedColumn(),
+                TimeRemainingColumn(),
             ) as progress:
                 # First pass: count total entries
                 logger.debug("Counting archive entries...")
-                total_entries = 0
-                with libarchive.file_reader(str(data_zip_path)) as archive:
-                    for entry in archive:
-                        if entry.isfile:
-                            total_entries += 1
+                with ZipReader(data_zip_path) as reader:
+                    all_entries = reader.list_entries()
+                    total_entries = sum(1 for entry in all_entries if entry.is_file)
                 
                 logger.debug(f"Found {total_entries} files in archive")
                 
                 # Second pass: read and group data
                 task = progress.add_task(
-                    f"[cyan]Reading {category} data from archive",
+                    f"[cyan]Reading {link} data from archive",
                     total=total_entries,
                 )
                 
                 files_matched = 0
-                with libarchive.file_reader(str(data_zip_path)) as archive:
-                    for entry in archive:
-                        if not entry.isfile:
+                with ZipReader(data_zip_path) as reader:
+                    for entry in all_entries:
+                        if not entry.is_file:
                             continue
 
                         progress.update(task, advance=1)
@@ -104,7 +104,7 @@ class CO3DDataLoader(DataLoader):
 
                         files_matched += 1
                         # Read file content into memory
-                        content = b"".join(entry.get_blocks())
+                        content = reader.read_file(entry.pathname)
 
                         # Group by category and id
                         if entry_category not in data_groups:
@@ -117,7 +117,7 @@ class CO3DDataLoader(DataLoader):
                         )
 
             logger.info(
-                f"Matched {files_matched} frame files for category '{category}'"
+                f"Matched {files_matched} frame files for {link}"
             )
 
             # Process grouped data
@@ -134,6 +134,7 @@ class CO3DDataLoader(DataLoader):
                 BarColumn(),
                 MofNCompleteColumn(),
                 TimeElapsedColumn(),
+                TimeRemainingColumn(),
             ) as progress:
                 task = progress.add_task(
                     f"[green]Loading {category} objects",

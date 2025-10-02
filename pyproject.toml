@@ -7,7 +7,6 @@ requires-python = ">=3.13"
 dependencies = [
     "aiohttp>=3.12.15",
     "anyio>=4.11.0",
-    "libarchive-c>=5.3",
     "loguru>=0.7.3",
     "pillow>=11.3.0",
     "rich>=14.1.0",

@@ -1,7 +1,6 @@
 
 import os
 import time
-import zipfile
 from collections.abc import Mapping
 from http.client import HTTPResponse
 from pathlib import Path
