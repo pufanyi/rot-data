@@ -13,6 +13,7 @@ from loguru import logger
 from rot_data.dataloader.co3d import CO3DDataLoader
 from rot_data.dataloader.data import DataLoader
 from rot_data.utils.logging import setup_logger
+from rot_data.utils.progress import get_progress_manager
 
 LoaderFactory = Callable[..., DataLoader]
 
@@ -30,6 +31,36 @@ def iter_dataset_items(loader: DataLoader) -> Iterator[dict[str, Any]]:
             "images": item.images,
             "predict_image": item.predict_image,
         }
+
+
+def collect_with_progress(iterator: Iterator[dict[str, Any]]) -> list[dict[str, Any]]:
+    """
+    Collect items from an iterator with a live progress display.
+
+    This function expects the ProgressManager to be already active
+    (typically started in the calling function or by the loader).
+    """
+    items = []
+    manager = get_progress_manager()
+
+    if manager.is_active:
+        # Add a collecting task to the existing progress display
+        collect_task = manager.add_task(
+            "[yellow]Collecting dataset items",
+            total=None,
+        )
+        try:
+            for item in iterator:
+                items.append(item)
+                manager.update(collect_task, advance=1)
+        finally:
+            manager.remove_task(collect_task)
+    else:
+        # Fallback: simple collection without progress display
+        for item in iterator:
+            items.append(item)
+
+    return items
 
 
 def get_loader(dataset_name: str, **loader_kwargs: Any) -> DataLoader:
@@ -58,6 +89,7 @@ def prepare_dataset(
     num_threads: int = 32,
     push_to_hub: bool = True,
     num_proc: int = 32,
+    from_generator: bool = False,
 ) -> Dataset:
     """
     Build a Hugging Face dataset from the configured loader
@@ -76,11 +108,20 @@ def prepare_dataset(
         }
     )
 
-    dataset = Dataset.from_generator(
-        lambda: iter_dataset_items(loader),
-        num_proc=num_proc,
-        features=features,
-    )
+    manager = get_progress_manager()
+
+    # Start progress manager to ensure beautiful progress display
+    # The loader and collection will both use this shared progress instance
+    with manager.managed_progress():
+        if from_generator:
+            dataset = Dataset.from_generator(
+                lambda: iter_dataset_items(loader),
+                num_proc=num_proc,
+                features=features,
+            )
+        else:
+            items = collect_with_progress(iter_dataset_items(loader))
+            dataset = Dataset.from_list(items, features=features)
 
     logger.success(f"Dataset prepared with {dataset.num_rows} records")
 
@@ -115,6 +156,11 @@ def parse_args() -> argparse.Namespace:
         help="Cache directory for intermediate artifacts",
     )
     parser.add_argument(
+        "--from-generator",
+        action="store_true",
+        help="Use generator for dataset processing",
+    )
+    parser.add_argument(
         "--num-threads",
         type=int,
         default=32,
@@ -147,6 +193,7 @@ def main() -> None:
         dataset_name=args.dataset_name,
         repo_id=args.repo_id,
         cache_dir=args.cache_dir,
+        from_generator=args.from_generator,
         num_threads=args.num_threads,
         push_to_hub=not args.no_push,
         num_proc=args.num_proc,

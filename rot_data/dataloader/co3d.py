@@ -43,6 +43,7 @@ SUBSET_FEATURES = Features(
     }
 )
 
+
 def select_frames[T](frame_list: list[T]) -> tuple[list[T], T]:
     """
     Select evenly spaced frames from a list.
@@ -145,7 +146,7 @@ class CO3DDataLoader(DataLoader):
             if image_bytes is not None:
                 with Image.open(io.BytesIO(image_bytes)) as pil_image:
                     return pil_image.copy()
-        if isinstance(image, (bytes, bytearray)):
+        if isinstance(image, bytes | bytearray):
             with Image.open(io.BytesIO(image)) as pil_image:
                 return pil_image.copy()
         raise TypeError(f"Unsupported image payload type: {type(image)!r}")
@@ -175,7 +176,8 @@ class CO3DDataLoader(DataLoader):
                 )
             except Exception as exc:
                 logger.warning(
-                    f"Skipping corrupted record '{record.get('id', '<unknown>')}' in subset '{subset_name}': {exc}",
+                    f"Skipping corrupted record '{record.get('id', '<unknown>')}' "
+                    f"in subset '{subset_name}': {exc}",
                 )
 
     def _build_subset_dataset(
@@ -186,7 +188,8 @@ class CO3DDataLoader(DataLoader):
         subset_cache_dir = self._subset_cache_dir(subset_name)
 
         logger.info(
-            f"Processing category '{category}' from {link} to build subset '{subset_name}'",
+            f"Processing category '{category}' from {link} to build "
+            f"subset '{subset_name}'",
         )
 
         manager = get_progress_manager()
@@ -308,14 +311,14 @@ class CO3DDataLoader(DataLoader):
                 if load_task is not None and manager.is_active:
                     manager.remove_task(load_task)
                 logger.success(
-                    f"Completed loading category '{category}': {len(records)} objects processed",
-                    category,
-                    len(records),
+                    f"Completed loading category '{category}': {len(records)} "
+                    "objects processed",
                 )
 
             if not records:
                 logger.warning(
-                    f"No valid records collected for subset '{subset_name}' (category '{category}'). Skipping cache.",
+                    f"No valid records collected for subset '{subset_name}' "
+                    f"(category '{category}'). Skipping cache.",
                 )
                 return None
 
@@ -332,10 +335,8 @@ class CO3DDataLoader(DataLoader):
                 json.dumps(metadata, indent=2)
             )
             logger.success(
-                f"Cached subset '{subset_name}' with {len(records)} records at {subset_cache_dir}",
-                subset_name,
-                len(records),
-                subset_cache_dir,
+                f"Cached subset '{subset_name}' with {len(records)} records "
+                f"at {subset_cache_dir}",
             )
             return dataset
         except DownloadError as exc:
@@ -345,7 +346,6 @@ class CO3DDataLoader(DataLoader):
             if worker_folder.exists():
                 shutil.rmtree(worker_folder)
                 logger.debug(f"Cleaned up temporary folder: {worker_folder}")
-
 
     def _collect_jobs(self) -> list[tuple[str, str]]:
         jobs: list[tuple[str, str]] = []
@@ -385,7 +385,8 @@ class CO3DDataLoader(DataLoader):
                 token=token,
             )
             logger.success(
-                f"Subset '{subset_name}' pushed to '{repo_id}' as config '{subset_name}'",
+                f"Subset '{subset_name}' pushed to '{repo_id}' as config "
+                f"'{subset_name}'",
             )
 
     def load(self) -> Iterable[Data]:
@@ -414,7 +415,9 @@ class CO3DDataLoader(DataLoader):
             finally:
                 result_queue.put(sentinel)
 
-        with manager.managed_progress(total_tasks=len(jobs)):
+        # Check if ProgressManager is already active to avoid nesting conflicts
+        if manager.is_active:
+            # Reuse existing progress manager
             with ThreadPoolExecutor(max_workers=self.num_threads) as executor:
                 for job_category, job_link in jobs:
                     executor.submit(worker, job_category, job_link)
@@ -424,9 +427,23 @@ class CO3DDataLoader(DataLoader):
                     item = result_queue.get()
                     if item is sentinel:
                         completed_jobs += 1
-                        manager.advance_overall()
                         continue
                     yield item
+        else:
+            # Start a new progress manager
+            with manager.managed_progress(total_tasks=len(jobs)):
+                with ThreadPoolExecutor(max_workers=self.num_threads) as executor:
+                    for job_category, job_link in jobs:
+                        executor.submit(worker, job_category, job_link)
+
+                    completed_jobs = 0
+                    while completed_jobs < len(jobs):
+                        item = result_queue.get()
+                        if item is sentinel:
+                            completed_jobs += 1
+                            manager.advance_overall()
+                            continue
+                        yield item
 
 
 if __name__ == "__main__":

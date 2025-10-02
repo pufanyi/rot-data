@@ -30,7 +30,7 @@ def setup_logger(
     if use_rich:
         # Import here to avoid circular dependency
         from .progress import get_progress_manager
-        
+
         # Use the shared console from ProgressManager for better compatibility
         manager = get_progress_manager()
         rich_handler = RichHandler(

@@ -87,7 +87,7 @@ def _decode_snippet(data: bytes) -> str:
 def download_file(
     url: str,
     path: str | os.PathLike,
-    num_retries: int = 5,
+    num_retries: int = 10,
     timeout: float = 10,
     description: str | None = None,
 ) -> Path:
