@@ -2,7 +2,6 @@
 
 import sys
 from pathlib import Path
-from typing import Optional
 
 from loguru import logger
 from rich.console import Console
@@ -11,7 +10,7 @@ from rich.logging import RichHandler
 
 def setup_logger(
     level: str = "INFO",
-    log_file: Optional[Path] = None,
+    log_file: Path | None = None,
     rotation: str = "10 MB",
     retention: str = "1 week",
     use_rich: bool = True,
@@ -96,4 +95,3 @@ def get_logger():
         The loguru logger instance
     """
     return logger
-

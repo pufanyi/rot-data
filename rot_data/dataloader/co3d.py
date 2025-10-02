@@ -4,7 +4,9 @@ import os
 import re
 import shutil
 from collections.abc import Iterable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from queue import Queue
 from random import randint
 
 import numpy as np
@@ -223,9 +225,48 @@ class CO3DDataLoader(DataLoader):
 
     def load(self) -> Iterable[Data]:
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        link = "https://dl.fbaipublicfiles.com/co3dv2_231130/apple_006.zip"
-        category = "apple"
-        yield from self._load_one(link, category)
+
+        jobs: list[tuple[str, str]] = []
+        for categories in self.links.values():
+            if not isinstance(categories, dict):
+                continue
+            for category, links in categories.items():
+                if category.upper() == "METADATA":
+                    continue
+                for link in links:
+                    jobs.append((category, link))
+
+        if not jobs:
+            logger.warning("No CO3D links available to load")
+            return
+
+        result_queue: Queue[Data | object] = Queue()
+        sentinel = object()
+
+        def worker(job_category: str, job_link: str) -> None:
+            try:
+                for data in self._load_one(job_link, job_category):
+                    result_queue.put(data)
+            except DownloadError as exc:
+                logger.error(f"Failed to load {job_link}: {exc}")
+            except Exception:
+                logger.exception(
+                    f"Unexpected error while loading {job_category} from {job_link}"
+                )
+            finally:
+                result_queue.put(sentinel)
+
+        with ThreadPoolExecutor(max_workers=self.num_threads) as executor:
+            for job_category, job_link in jobs:
+                executor.submit(worker, job_category, job_link)
+
+            completed_jobs = 0
+            while completed_jobs < len(jobs):
+                item = result_queue.get()
+                if item is sentinel:
+                    completed_jobs += 1
+                    continue
+                yield item
 
 
 if __name__ == "__main__":
