@@ -7,22 +7,12 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
+from datasets import Dataset, Features, Image, Sequence, Value
 from loguru import logger
 
 from rot_data.dataloader.co3d import CO3DDataLoader
 from rot_data.dataloader.data import DataLoader
 from rot_data.utils.logging import setup_logger
-
-try:
-    from datasets import Dataset, Features, Image, Sequence, Value
-    from datasets.utils import disable_progress_bar
-except ImportError as exc:  # pragma: no cover - import guard for optional dependency
-    raise ImportError(
-        "The 'datasets' package is required to prepare and upload datasets. "
-        "Install it with `uv add datasets huggingface_hub` or your preferred "
-        "package manager."
-    ) from exc
-
 
 LoaderFactory = Callable[..., DataLoader]
 
@@ -68,15 +58,11 @@ def prepare_dataset(
     num_threads: int = 4,
     push_to_hub: bool = True,
     num_proc: int = 8,
-    disable_dataset_progress: bool = True,
 ) -> Dataset:
     """
     Build a Hugging Face dataset from the configured loader
     and optionally push it.
     """
-    if disable_dataset_progress:
-        disable_progress_bar()
-    
     loader = get_loader(dataset_name, cache_dir=str(cache_dir), num_threads=num_threads)
 
     logger.info("Building Hugging Face dataset using '%s' loader", dataset_name)
@@ -100,9 +86,9 @@ def prepare_dataset(
 
     if push_to_hub:
         target_repo = repo_id or f"pufanyi/{dataset_name}"
-        logger.info("Pushing dataset to Hugging Face hub repo '%s'", target_repo)
+        logger.info(f"Pushing dataset to Hugging Face hub repo '{target_repo}'")
         dataset.push_to_hub(target_repo)
-        logger.success("Dataset pushed to '%s'", target_repo)
+        logger.success(f"Dataset pushed to '{target_repo}'")
 
     return dataset
 
@@ -144,11 +130,6 @@ def parse_args() -> argparse.Namespace:
         default="INFO",
         help="Logging level (e.g., INFO, DEBUG)",
     )
-    parser.add_argument(
-        "--no-disable-dataset-progress",
-        action="store_true",
-        help="Show datasets library progress bars (disabled by default)",
-    )
     return parser.parse_args()
 
 
@@ -162,7 +143,6 @@ def main() -> None:
         cache_dir=args.cache_dir,
         num_threads=args.num_threads,
         push_to_hub=not args.no_push,
-        disable_dataset_progress=not args.no_disable_dataset_progress,
     )
 
 

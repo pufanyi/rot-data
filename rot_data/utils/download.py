@@ -93,7 +93,7 @@ def download_file(
 ) -> Path:
     """
     Download ``url`` to ``path`` with HTTP range resume support.
-    
+
     Args:
         url: URL to download from
         path: Local path to save the file
@@ -199,8 +199,7 @@ def download_file(
                     "Server rejected range; restarting download"
                 )
                 logger.warning(
-                    f"Retry attempt {attempt}/{num_retries}: Range rejected, "
-                    f"restarting"
+                    f"Retry attempt {attempt}/{num_retries}: Range rejected, restarting"
                 )
             elif 500 <= status < 600:
                 error_to_raise = _RetryableDownloadError(
@@ -211,9 +210,7 @@ def download_file(
                 )
             else:
                 body_snippet = _decode_snippet(http_error.read()[:200])
-                logger.error(
-                    f"Download failed with status {status}: {body_snippet}"
-                )
+                logger.error(f"Download failed with status {status}: {body_snippet}")
                 raise DownloadError(
                     f"Unexpected status {status} while downloading {url}: "
                     f"{body_snippet}"

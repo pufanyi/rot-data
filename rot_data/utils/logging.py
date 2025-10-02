@@ -38,6 +38,7 @@ def setup_logger(
             show_time=True,
             show_level=True,
             show_path=True,
+            omit_repeated_times=False,
         )
         logger.add(
             rich_handler,

@@ -89,7 +89,7 @@ class CO3DDataLoader(DataLoader):
             data_groups: dict[str, dict[str, list[tuple[str, bytes]]]] = {}
 
             manager = get_progress_manager()
-            
+
             # First pass: count total entries
             logger.debug("Counting archive entries...")
             with ZipReader(data_zip_path) as reader:
@@ -239,6 +239,7 @@ class CO3DDataLoader(DataLoader):
         manager = get_progress_manager()
 
         def worker(job_category: str, job_link: str) -> None:
+            print(f"job_category: {job_category}, job_link: {job_link}")
             try:
                 for data in self._load_one(job_link, job_category):
                     result_queue.put(data)

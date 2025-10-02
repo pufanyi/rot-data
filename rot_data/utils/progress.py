@@ -29,32 +29,29 @@ class SmartProgressColumn(ProgressColumn):
         """Render the progress column based on task type."""
         # Check if this is a download task (has is_download metadata)
         is_download = task.fields.get("is_download", False)
-        
+
         if is_download:
             # Use human-readable byte format for downloads
             completed = task.completed
             total = task.total
-            
+
             if total is None:
                 return Text(self._format_bytes(completed), style="progress.download")
-            
+
             return Text(
                 f"{self._format_bytes(completed)}/{self._format_bytes(total)}",
-                style="progress.download"
+                style="progress.download",
             )
         else:
             # Use count format for other tasks
             completed = int(task.completed)
             total = task.total
-            
+
             if total is None:
                 return Text(str(completed), style="progress.download")
-            
-            return Text(
-                f"{completed}/{int(total)}",
-                style="progress.download"
-            )
-    
+
+            return Text(f"{completed}/{int(total)}", style="progress.download")
+
     @staticmethod
     def _format_bytes(size: float) -> str:
         """Format bytes in human-readable format."""
@@ -74,19 +71,19 @@ class SmartSpeedColumn(ProgressColumn):
     def render(self, task: Task) -> Text:
         """Render the speed column only for download tasks."""
         is_download = task.fields.get("is_download", False)
-        
+
         if not is_download:
             # Don't show speed for non-download tasks
             return Text("")
-        
+
         # Show transfer speed for download tasks
         speed = task.finished_speed or task.speed
         if speed is None:
             return Text("", style="progress.data.speed")
-        
+
         # Format speed in human-readable format
         return Text(f"{self._format_speed(speed)}", style="progress.data.speed")
-    
+
     @staticmethod
     def _format_speed(speed: float) -> str:
         """Format speed in human-readable format."""
@@ -97,10 +94,31 @@ class SmartSpeedColumn(ProgressColumn):
         return f"{speed:.1f} TB/s"
 
 
+class SmartTimeRemainingColumn(ProgressColumn):
+    """Display time estimates with an ETA prefix for tasks that request it."""
+
+    def __init__(self) -> None:
+        self._base_column = TimeRemainingColumn()
+
+    def render(self, task: Task) -> Text:
+        base_render = self._base_column.render(task)
+        if not task.fields.get("show_eta", False):
+            return base_render
+
+        if task.time_remaining is None or base_render.plain.strip() in {
+            "?",
+            "",
+            "--:--",
+        }:
+            return Text("ETA --", style="progress.remaining")
+
+        return Text(f"ETA {base_render.plain}", style="progress.remaining")
+
+
 class ProgressManager:
     """
     Singleton manager for coordinating progress bars across threads.
-    
+
     All progress bars are displayed in a single Progress instance at the bottom
     of the terminal, with the overall progress bar shown at the top.
     """
@@ -128,7 +146,7 @@ class ProgressManager:
     def managed_progress(self, total_tasks: int | None = None):
         """
         Context manager that creates and manages the shared Progress instance.
-        
+
         Args:
             total_tasks: Total number of tasks to process (for overall progress bar)
         """
@@ -139,7 +157,8 @@ class ProgressManager:
 
         try:
             # Create a single Progress instance with all columns
-            # SmartProgressColumn automatically formats bytes for downloads and counts for others
+            # SmartProgressColumn automatically formats bytes for downloads
+            # and counts for other task types.
             # SmartSpeedColumn only shows speed for download tasks
             self._progress = Progress(
                 SpinnerColumn(),
@@ -147,7 +166,7 @@ class ProgressManager:
                 BarColumn(),
                 SmartProgressColumn(),
                 SmartSpeedColumn(),
-                TimeRemainingColumn(),
+                SmartTimeRemainingColumn(),
             )
 
             with self._progress:
@@ -156,6 +175,7 @@ class ProgressManager:
                     self._overall_task_id = self._progress.add_task(
                         "[bold magenta]Overall Progress",
                         total=total_tasks,
+                        show_eta=True,
                     )
                 else:
                     self._overall_task_id = None
@@ -177,7 +197,7 @@ class ProgressManager:
     def add_download_task(self, description: str, **kwargs: Any) -> TaskID:
         """
         Add a download task with byte-formatted progress display.
-        
+
         The progress will be displayed in human-readable format (e.g., 4.46 GB/18.65 GB)
         instead of raw bytes.
         """
@@ -219,4 +239,3 @@ _manager = ProgressManager()
 def get_progress_manager() -> ProgressManager:
     """Get the global progress manager instance."""
     return _manager
-
