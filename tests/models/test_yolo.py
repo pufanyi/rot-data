@@ -15,7 +15,7 @@ class _FakeTensor:
     def __init__(self, values: np.ndarray) -> None:
         self._values = np.asarray(values, dtype=float)
 
-    def cpu(self) -> "_FakeTensor":
+    def cpu(self) -> _FakeTensor:
         return self
 
     def numpy(self) -> np.ndarray:
@@ -23,7 +23,9 @@ class _FakeTensor:
 
 
 class _FakeBoxes:
-    def __init__(self, xyxy: list[list[float]], conf: list[float], cls: list[int]) -> None:
+    def __init__(
+        self, xyxy: list[list[float]], conf: list[float], cls: list[int]
+    ) -> None:
         self.xyxy = _FakeTensor(np.array(xyxy, dtype=float))
         self.conf = _FakeTensor(np.array(conf, dtype=float))
         self.cls = _FakeTensor(np.array(cls, dtype=float))

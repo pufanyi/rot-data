@@ -89,7 +89,8 @@ def annotate_dataset(args: argparse.Namespace) -> datasets.Dataset:
     model_path = Path(args.model_path)
     if not model_path.exists():
         logger.warning(
-            f"Model file '{model_path}' not found locally. Ultralytics will attempt to download it.",
+            f"Model file '{model_path}' not found locally. "
+            "Ultralytics will attempt to download it.",
         )
 
     detector = YOLOBoundingBoxDetector(

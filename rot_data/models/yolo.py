@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Sequence
 
 import numpy as np
 from PIL import Image
@@ -58,7 +58,7 @@ class YOLOBoundingBoxDetector:
             getattr(self._model, "model", None), "names", {}
         )
         if isinstance(names, Sequence):
-            self.class_names = {idx: name for idx, name in enumerate(names)}
+            self.class_names = dict(enumerate(names))
         elif isinstance(names, dict):
             self.class_names = {int(idx): str(name) for idx, name in names.items()}
         else:  # pragma: no cover - defensive fallback for unexpected formats
@@ -119,9 +119,7 @@ class YOLOBoundingBoxDetector:
 
         if label is not None:
             label_lower = label.lower()
-            matches = [
-                box for box in candidates if box.label.lower() == label_lower
-            ]
+            matches = [box for box in candidates if box.label.lower() == label_lower]
             if matches:
                 return max(matches, key=lambda box: box.score)
 
@@ -138,8 +136,7 @@ class YOLOBoundingBoxDetector:
             if image.ndim == 3 and image.shape[2] == 4:
                 return image[..., :3]
             raise ValueError(
-                "Unsupported ndarray shape for YOLO detection: "
-                f"{image.shape!r}"
+                f"Unsupported ndarray shape for YOLO detection: {image.shape!r}"
             )
 
         if isinstance(image, Image.Image):

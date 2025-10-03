@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import json
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
-from datasets import Dataset, Features, Image, Sequence, Value
 from loguru import logger
 
 from rot_data.dataloader.co3d import CO3DDataLoader
@@ -81,68 +81,82 @@ def get_loader(dataset_name: str, **loader_kwargs: Any) -> DataLoader:
         ) from exc
 
 
-def prepare_dataset(
+def save_dataset_to_jsonl(
     dataset_name: str = "co3d",
     *,
-    repo_id: str | None = None,
+    output_dir: str | Path = "output",
     cache_dir: str | Path = "cache",
     num_threads: int = 32,
-    push_to_hub: bool = True,
-    num_proc: int = 32,
-    from_generator: bool = False,
-) -> Dataset:
+) -> None:
     """
-    Build a Hugging Face dataset from the configured loader
-    and optionally push it.
+    Build a dataset from the configured loader and save to jsonl format.
+    Images are saved to a separate directory and referenced by relative paths.
     """
     loader = get_loader(dataset_name, cache_dir=str(cache_dir), num_threads=num_threads)
 
-    logger.info(f"Building Hugging Face dataset using '{dataset_name}' loader")
+    logger.info(f"Building dataset using '{dataset_name}' loader")
 
-    features = Features(
-        {
-            "id": Value("string"),
-            "label": Value("string"),
-            "images": Sequence(feature=Image()),
-            "predict_image": Image(),
-        }
-    )
+    output_path = Path(output_dir)
+    images_dir = output_path / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+
+    jsonl_path = output_path / "data.jsonl"
 
     manager = get_progress_manager()
 
     # Start progress manager to ensure beautiful progress display
     # The loader and collection will both use this shared progress instance
     with manager.managed_progress():
-        if from_generator:
-            dataset = Dataset.from_generator(
-                lambda: iter_dataset_items(loader),
-                num_proc=num_proc,
-                features=features,
-            )
-        else:
-            items = collect_with_progress(iter_dataset_items(loader))
-            logger.info(f"Collected {len(items)} items")
+        items = collect_with_progress(iter_dataset_items(loader))
+        logger.info(f"Collected {len(items)} items")
 
-            dataset = Dataset.from_generator(
-                lambda: items,
-                features=features,
-            )
+        # Save images and create jsonl entries
+        logger.info(f"Saving images to {images_dir} and metadata to {jsonl_path}")
 
-    logger.success(f"Dataset prepared with {dataset.num_rows} records")
+        save_task = manager.add_task(
+            "[green]Saving dataset",
+            total=len(items),
+        )
 
-    if push_to_hub:
-        target_repo = repo_id or f"pufanyi/{dataset_name}"
-        logger.info(f"Pushing dataset to Hugging Face hub repo '{target_repo}'")
-        dataset.push_to_hub(target_repo)
-        logger.success(f"Dataset pushed to '{target_repo}'")
+        with jsonl_path.open("w", encoding="utf-8") as f:
+            for item in items:
+                # Save images
+                image_paths = []
+                for idx, img in enumerate(item["images"]):
+                    img_filename = f"{item['id']}_input_{idx}.jpg"
+                    img_path = images_dir / img_filename
+                    img.save(img_path)
+                    # Store relative path from output_dir
+                    image_paths.append(f"images/{img_filename}")
 
-    return dataset
+                # Save predict image
+                predict_img_filename = f"{item['id']}_predict.jpg"
+                predict_img_path = images_dir / predict_img_filename
+                item["predict_image"].save(predict_img_path)
+                predict_img_rel_path = f"images/{predict_img_filename}"
+
+                # Create jsonl entry
+                jsonl_entry = {
+                    "id": item["id"],
+                    "label": item["label"],
+                    "images": image_paths,
+                    "predict_image": predict_img_rel_path,
+                }
+
+                f.write(json.dumps(jsonl_entry, ensure_ascii=False) + "\n")
+                manager.update(save_task, advance=1)
+
+        manager.remove_task(save_task)
+
+    logger.success(f"Dataset saved with {len(items)} records to {output_path}")
+    logger.success(f"  - Metadata: {jsonl_path}")
+    logger.success(f"  - Images: {images_dir}")
 
 
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments for dataset preparation."""
     parser = argparse.ArgumentParser(
-        description="Prepare datasets and push to Hugging Face"
+        description="Prepare datasets and save to jsonl format"
     )
     parser.add_argument(
         "--dataset-name",
@@ -151,9 +165,9 @@ def parse_args() -> argparse.Namespace:
         help="Data source to load",
     )
     parser.add_argument(
-        "--repo-id",
-        default=None,
-        help="Target Hugging Face repo (defaults to 'pufanyi/<dataset-name>')",
+        "--output-dir",
+        default="output",
+        help="Output directory for jsonl and images",
     )
     parser.add_argument(
         "--cache-dir",
@@ -161,26 +175,10 @@ def parse_args() -> argparse.Namespace:
         help="Cache directory for intermediate artifacts",
     )
     parser.add_argument(
-        "--from-generator",
-        action="store_true",
-        help="Use generator for dataset processing",
-    )
-    parser.add_argument(
         "--num-threads",
         type=int,
         default=32,
         help="Number of threads for data loading",
-    )
-    parser.add_argument(
-        "--num-proc",
-        type=int,
-        default=32,
-        help="Number of processes for dataset processing",
-    )
-    parser.add_argument(
-        "--no-push",
-        action="store_true",
-        help="Skip pushing the prepared dataset to the Hugging Face hub",
     )
     parser.add_argument(
         "--log-level",
@@ -194,14 +192,11 @@ def main() -> None:
     args = parse_args()
     setup_logger(level=args.log_level)
 
-    prepare_dataset(
+    save_dataset_to_jsonl(
         dataset_name=args.dataset_name,
-        repo_id=args.repo_id,
+        output_dir=args.output_dir,
         cache_dir=args.cache_dir,
-        from_generator=args.from_generator,
         num_threads=args.num_threads,
-        push_to_hub=not args.no_push,
-        num_proc=args.num_proc,
     )
 
 
