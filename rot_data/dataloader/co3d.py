@@ -90,7 +90,7 @@ class CO3DDataLoader(DataLoader):
         self,
         cache_dir: str | os.PathLike = "cache",
         num_threads: int = 4,
-        auto_push_to_hub: bool = True,
+        auto_push_to_hub: bool = False,
         hub_repo_id: str | None = None,
         hub_private: bool | None = None,
         hub_token: str | None = None,
@@ -106,7 +106,7 @@ class CO3DDataLoader(DataLoader):
         )
         self.dataset_cache_root.mkdir(parents=True, exist_ok=True)
         self.num_threads = num_threads
-        
+
         # Hub upload settings
         self.auto_push_to_hub = auto_push_to_hub
         self.hub_repo_id = hub_repo_id or DATASET_REPO_ID
@@ -348,7 +348,7 @@ class CO3DDataLoader(DataLoader):
                 f"Cached subset '{subset_name}' with {len(records)} records "
                 f"at {subset_cache_dir}",
             )
-            
+
             # Auto push to hub if enabled
             if self.auto_push_to_hub:
                 try:
@@ -370,7 +370,7 @@ class CO3DDataLoader(DataLoader):
                         f"Failed to push subset '{subset_name}' to hub: {exc}",
                     )
                     # Don't fail the entire process if push fails
-            
+
             return dataset
         except DownloadError as exc:
             logger.error(f"Failed to download {link}: {exc}")
@@ -389,6 +389,8 @@ class CO3DDataLoader(DataLoader):
                 if category.upper() == "METADATA":
                     continue
                 for link in links:
+                    if "000" in link:
+                        continue
                     jobs.append((category, link))
         return jobs
 
@@ -431,7 +433,7 @@ class CO3DDataLoader(DataLoader):
             logger.warning("No CO3D links available to load")
             return
 
-        result_queue: Queue[Data | object] = Queue()
+        result_queue: Queue[Data | object] = Queue(maxsize=100)
         sentinel = object()
         manager = get_progress_manager()
 

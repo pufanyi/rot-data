@@ -121,7 +121,12 @@ def prepare_dataset(
             )
         else:
             items = collect_with_progress(iter_dataset_items(loader))
-            dataset = Dataset.from_list(items, features=features)
+            logger.info(f"Collected {len(items)} items")
+
+            dataset = Dataset.from_generator(
+                lambda: items,
+                features=features,
+            )
 
     logger.success(f"Dataset prepared with {dataset.num_rows} records")
 

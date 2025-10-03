@@ -30,16 +30,16 @@ if __name__ == "__main__":
     for record in tqdm.tqdm(dataset):
         # Collect all three images
         all_images = list(record["images"]) + [record["predict_image"]]
-        
+
         # Compute sizes
         sizes = [image.size for image in all_images]
-        
+
         # Compute Laplacian variance for each image
         laplacian_vars = [compute_laplacian_variance(img) for img in all_images]
-        
+
         # Compute Tenengrad for each image
         tenengrads = [compute_tenengrad(img) for img in all_images]
-        
+
         output_dataset.append(
             {
                 "id": record["id"],
@@ -57,6 +57,6 @@ if __name__ == "__main__":
                 "tenengrad_2": tenengrads[2],
             }
         )
-    
+
     output_dataset = datasets.Dataset.from_list(output_dataset)
     output_dataset.push_to_hub(OUTPUT_REPO_ID, split="train")
