@@ -15,6 +15,7 @@ from PIL import Image, ImageDraw
 from tqdm import tqdm
 
 from rot_data.models.yolo import BoundingBox, YOLOBoundingBoxDetector
+from rot_data.pipeline.mask import mask_record
 
 DATASET_REPO_ID = "pufanyi/co3d-filtered"
 OUTPUT_REPO_ID = "pufanyi/co3d-masked-yolo"
@@ -181,9 +182,12 @@ def _run_batch(
     masked_images: list[Image.Image] = []
     missing = 0
     for record, bbox in zip(batch, bboxes, strict=True):
+        image = record["predict_image"]
         if bbox is None:
             missing += 1
-        masked_images.append(mask_image_with_bbox(record["predict_image"], bbox))
+            masked_images.append(mask_record(image))
+            continue
+        masked_images.append(mask_image_with_bbox(image, bbox))
 
     return masked_images, missing
 
