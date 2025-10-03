@@ -149,3 +149,59 @@ def test_resolve_devices_prefers_autodetected(monkeypatch: pytest.MonkeyPatch) -
 def test_resolve_devices_falls_back_to_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(mask_yolo, "_autodetect_devices", lambda: [])
     assert mask_yolo._resolve_devices(None, None) == [None]
+
+
+def test_mask_dataset_random_mask_when_detector_returns_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    image = Image.new("RGB", (2, 2), color=(123, 231, 132))
+    dataset = DummyDataset(
+        [
+            {"predict_image": image, "label": "chair"},
+        ]
+    )
+
+    class NoneDetector:
+        def __init__(self, *_, **__):
+            self.calls: list[tuple[list[Image.Image], list[str | None]]] = []
+
+        def detect_batch(self, images, labels):
+            batch_images = list(images)
+            batch_labels = [label if label is None else str(label) for label in labels]
+            self.calls.append((batch_images, batch_labels))
+            return [None for _ in batch_images]
+
+    fallback_calls: list[Image.Image] = []
+    fallback_result = Image.new("RGB", (2, 2), color=(64, 64, 64))
+
+    def fake_mask_record(pil_image: Image.Image) -> Image.Image:
+        fallback_calls.append(pil_image)
+        return fallback_result
+
+    image_feature = DummyImageFeature()
+
+    monkeypatch.setattr(mask_yolo.datasets, "load_dataset", lambda repo, split: dataset)
+    monkeypatch.setattr(mask_yolo, "YOLOBoundingBoxDetector", NoneDetector)
+    monkeypatch.setattr(mask_yolo, "DatasetImage", lambda: image_feature)
+    monkeypatch.setattr(mask_yolo, "mask_record", fake_mask_record)
+
+    args = SimpleNamespace(
+        dataset_repo="source/repo",
+        output_repo="target/repo",
+        model_path="weights.pt",
+        device="cpu",
+        devices=None,
+        confidence=0.25,
+        iou=0.7,
+        batch_size=1,
+        num_workers=1,
+        skip_push=True,
+    )
+
+    result = mask_yolo.mask_dataset(args)
+
+    assert result is dataset
+    assert fallback_calls == [image]
+    masked_column = dataset.added_columns["masked_image"]
+    assert len(masked_column) == 1
+    assert masked_column[0]["image"] is fallback_result
