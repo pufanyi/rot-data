@@ -1,97 +1,97 @@
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from PIL import Image
 
 from rot_data.models.yolo import BoundingBox
-from rot_data.pipeline import mask
+from rot_data.pipeline import mask_yolo
 
 
-class _DummyDataset:
-    def __init__(self, records: list[dict[str, object]]) -> None:
-        self._records = records
+class DummyDataset:
+    def __init__(self, records):
+        self.records = records
+        self.added_columns: dict[str, list[dict[str, object]]] = {}
+        self.cast_columns: list[tuple[str, object]] = []
+        self.push_calls: list[tuple[str, str]] = []
 
     def __iter__(self):
-        return iter(self._records)
+        return iter(self.records)
 
     def __len__(self) -> int:
-        return len(self._records)
+        return len(self.records)
 
-    def __getitem__(self, index: int) -> dict[str, object]:
-        return self._records[index]
+    def __getitem__(self, index: int):
+        return self.records[index]
 
     @property
     def num_rows(self) -> int:
-        return len(self._records)
+        return len(self.records)
+
+    def add_column(self, name: str, values):
+        self.added_columns[name] = list(values)
+        return self
+
+    def cast_column(self, name: str, feature):
+        self.cast_columns.append((name, feature))
+        return self
+
+    def push_to_hub(self, repo: str, split: str):
+        self.push_calls.append((repo, split))
 
 
-class _DummyDetector:
-    def __init__(self, *_, **__) -> None:
+class DummyDetector:
+    instances: list["DummyDetector"] = []
+
+    def __init__(self, *_, **__):
         self.calls: list[tuple[object, object]] = []
+        DummyDetector.instances.append(self)
 
-    def detect_bbox(self, image: object, label: object) -> BoundingBox:
+    def detect_bbox(self, image, label):
         self.calls.append((image, label))
         return BoundingBox(
-            x_min=1,
-            y_min=2,
-            x_max=3,
-            y_max=4,
+            x_min=0,
+            y_min=0,
+            x_max=image.width,
+            y_max=image.height,
             score=0.99,
-            label=str(label),
+            label=str(label or "object"),
             class_id=0,
         )
 
 
-def test_bbox_to_payload_handles_none() -> None:
-    payload = mask.bbox_to_payload(None)
+class DummyImageFeature:
+    def __init__(self) -> None:
+        self.encoded: list[Image.Image] = []
 
-    assert payload == {
-        "bbox_x_min": None,
-        "bbox_y_min": None,
-        "bbox_x_max": None,
-        "bbox_y_max": None,
-        "bbox_score": None,
-        "bbox_label": None,
-        "bbox_class_id": None,
-    }
+    def encode_example(self, image: Image.Image) -> dict[str, Image.Image]:
+        self.encoded.append(image)
+        return {"image": image}
 
 
-def test_annotate_dataset_builds_output(monkeypatch: pytest.MonkeyPatch) -> None:
-    records = [
-        {
-            "id": "item-1",
-            "label": "chair",
-            "images": ["image-a", "image-b"],
-            "predict_image": "image-pred",
-        }
-    ]
+def test_mask_image_with_bbox_blanks_region() -> None:
+    image = Image.new("RGB", (4, 4), color=(255, 255, 255))
+    bbox = BoundingBox(1, 1, 3, 3, 0.9, "chair", 0)
 
-    dataset = _DummyDataset(records)
+    masked = mask_yolo.mask_image_with_bbox(image, bbox)
 
-    monkeypatch.setattr(
-        mask.datasets,
-        "load_dataset",
-        lambda repo, split: dataset,
-    )
-    monkeypatch.setattr(mask, "YOLOBoundingBoxDetector", _DummyDetector)
+    assert masked.getpixel((0, 0)) == (255, 255, 255)
+    for x in range(bbox.x_min, bbox.x_max):
+        for y in range(bbox.y_min, bbox.y_max):
+            assert masked.getpixel((x, y)) == (0, 0, 0)
 
-    annotated_items: list[dict[str, object]] = []
 
-    def fake_from_list(items):
-        annotated_items.extend(items)
-        assert len(items) == 1
-        return _DummyDataset(items)
+def test_mask_dataset_adds_mask_column(monkeypatch: pytest.MonkeyPatch) -> None:
+    image = Image.new("RGB", (2, 2), color=(255, 0, 0))
+    dataset = DummyDataset([{"predict_image": image, "label": "chair"}])
 
-    monkeypatch.setattr(
-        mask.datasets.Dataset,
-        "from_list",
-        classmethod(lambda cls, items: fake_from_list(items)),
-    )
+    DummyDetector.instances = []
+    image_feature = DummyImageFeature()
+
+    monkeypatch.setattr(mask_yolo.datasets, "load_dataset", lambda repo, split: dataset)
+    monkeypatch.setattr(mask_yolo, "YOLOBoundingBoxDetector", DummyDetector)
+    monkeypatch.setattr(mask_yolo, "DatasetImage", lambda: image_feature)
 
     args = SimpleNamespace(
         dataset_repo="source/repo",
@@ -103,9 +103,14 @@ def test_annotate_dataset_builds_output(monkeypatch: pytest.MonkeyPatch) -> None
         skip_push=True,
     )
 
-    result = mask.annotate_dataset(args)
+    result = mask_yolo.mask_dataset(args)
 
-    assert isinstance(result, _DummyDataset)
-    assert annotated_items[0]["bbox_x_min"] == 1
-    assert annotated_items[0]["bbox_score"] == 0.99
-    assert annotated_items[0]["bbox_label"] == "chair"
+    assert result is dataset
+    assert "masked_image" in dataset.added_columns
+    encoded_entry = dataset.added_columns["masked_image"][0]
+    assert encoded_entry["image"].getpixel((0, 0)) == (0, 0, 0)
+    assert image_feature.encoded[0].getpixel((0, 0)) == (0, 0, 0)
+    assert dataset.push_calls == []
+
+    detector = DummyDetector.instances[0]
+    assert detector.calls == [(image, "chair")]

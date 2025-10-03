@@ -1,24 +1,25 @@
-"""Pipeline that adds YOLO bounding boxes to the CO3D dataset."""
+"""Pipeline that applies YOLO-guided masks to the CO3D dataset."""
 
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 from typing import Any
 
 import datasets
-import tqdm
+from datasets import Image as DatasetImage
 from loguru import logger
+from PIL import Image, ImageDraw
+from tqdm import tqdm
 
 from rot_data.models.yolo import BoundingBox, YOLOBoundingBoxDetector
 
-DATASET_REPO_ID = "pufanyi/co3d"
-OUTPUT_REPO_ID = "pufanyi/co3d-with-bboxes"
-DEFAULT_MODEL_PATH = Path("rot_data/models/yolov8n.pt")
+DATASET_REPO_ID = "pufanyi/co3d-filtered"
+OUTPUT_REPO_ID = "pufanyi/co3d-masked-yolo"
+DEFAULT_MODEL_PATH = "rot_data/models/yolov8n.pt"
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Annotate dataset with YOLO boxes")
+    parser = argparse.ArgumentParser(description="Apply YOLO-driven masks to a dataset")
     parser.add_argument(
         "--dataset-repo",
         default=DATASET_REPO_ID,
@@ -27,11 +28,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-repo",
         default=OUTPUT_REPO_ID,
-        help="Destination repository for the annotated dataset",
+        help="Destination repository for the masked dataset",
     )
     parser.add_argument(
         "--model-path",
-        default=str(DEFAULT_MODEL_PATH),
+        default=DEFAULT_MODEL_PATH,
         help="Path or identifier for the YOLO weights",
     )
     parser.add_argument(
@@ -54,44 +55,59 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--skip-push",
         action="store_true",
-        help="Skip pushing the annotated dataset to the Hub",
+        help="Skip pushing the masked dataset to the Hub",
     )
     return parser.parse_args()
 
 
-def bbox_to_payload(bbox: BoundingBox | None) -> dict[str, Any]:
+def _mask_fill_for_mode(mode: str) -> tuple[int, ...] | int:
+    if mode == "RGBA":
+        return (0, 0, 0, 0)
+    if mode == "RGB":
+        return (0, 0, 0)
+    if mode == "LA":
+        return (0, 0)
+    return 0
+
+
+def _clamp(value: int, minimum: int, maximum: int) -> int:
+    return max(minimum, min(value, maximum))
+
+
+def mask_image_with_bbox(image: Image.Image, bbox: BoundingBox | None) -> Image.Image:
+    """Return *image* with the YOLO bounding box region filled using a solid mask."""
+
+    masked = image.copy()
+
     if bbox is None:
-        return {
-            "bbox_x_min": None,
-            "bbox_y_min": None,
-            "bbox_x_max": None,
-            "bbox_y_max": None,
-            "bbox_score": None,
-            "bbox_label": None,
-            "bbox_class_id": None,
-        }
+        return masked
 
-    return {
-        "bbox_x_min": bbox.x_min,
-        "bbox_y_min": bbox.y_min,
-        "bbox_x_max": bbox.x_max,
-        "bbox_y_max": bbox.y_max,
-        "bbox_score": bbox.score,
-        "bbox_label": bbox.label,
-        "bbox_class_id": bbox.class_id,
-    }
+    width, height = masked.size
+    left = _clamp(bbox.x_min, 0, width)
+    top = _clamp(bbox.y_min, 0, height)
+    right = _clamp(bbox.x_max, 0, width)
+    bottom = _clamp(bbox.y_max, 0, height)
 
-
-def annotate_dataset(args: argparse.Namespace) -> datasets.Dataset:
-    logger.info("Loading dataset '%s' from the Hugging Face Hub", args.dataset_repo)
-    dataset = datasets.load_dataset(args.dataset_repo, split="train")
-
-    model_path = Path(args.model_path)
-    if not model_path.exists():
-        logger.warning(
-            f"Model file '{model_path}' not found locally. "
-            "Ultralytics will attempt to download it.",
+    if left >= right or top >= bottom:
+        logger.debug(
+            "Discarding degenerate bbox (%s) for image sized %sx%s",
+            bbox,
+            width,
+            height,
         )
+        return masked
+
+    draw = ImageDraw.Draw(masked)
+    draw.rectangle(
+        [left, top, right - 1, bottom - 1],
+        fill=_mask_fill_for_mode(masked.mode),
+    )
+    return masked
+
+
+def mask_dataset(args: argparse.Namespace) -> datasets.Dataset:
+    logger.info(f"Loading dataset '{args.dataset_repo}' from the Hugging Face Hub")
+    dataset = datasets.load_dataset(args.dataset_repo, split="train")
 
     detector = YOLOBoundingBoxDetector(
         model_path=args.model_path,
@@ -100,40 +116,42 @@ def annotate_dataset(args: argparse.Namespace) -> datasets.Dataset:
         iou=args.iou,
     )
 
-    logger.info("Running YOLO detection on %d samples", dataset.num_rows)
-    annotated_records: list[dict[str, Any]] = []
-    for record in tqdm.tqdm(dataset, desc="Detecting bounding boxes"):
-        bbox = detector.detect_bbox(record["predict_image"], record.get("label"))
-        payload = bbox_to_payload(bbox)
-        annotated_records.append(
-            {
-                "id": record["id"],
-                "label": record["label"],
-                "images": record["images"],
-                "predict_image": record["predict_image"],
-                **payload,
-            }
-        )
+    image_feature = DatasetImage()
+    masked_images: list[dict[str, Any]] = []
 
-    annotated_dataset = datasets.Dataset.from_list(annotated_records)
-    logger.success(
-        "Annotated dataset assembled with %d entries", annotated_dataset.num_rows
+    missing_detections = 0
+    for record in tqdm(dataset, desc="Applying YOLO masks"):
+        image = record["predict_image"]
+        label = record.get("label")
+        bbox = detector.detect_bbox(image, label)
+        if bbox is None:
+            missing_detections += 1
+        masked_image = mask_image_with_bbox(image, bbox)
+        masked_images.append(image_feature.encode_example(masked_image))
+
+    logger.info(
+        "Processed %d items; %d lacked detections",
+        dataset.num_rows,
+        missing_detections,
     )
+
+    dataset = dataset.add_column("masked_image", masked_images)
+    dataset = dataset.cast_column("masked_image", image_feature)
 
     if not args.skip_push:
         logger.info(
-            "Pushing annotated dataset to '%s' on the Hugging Face Hub",
+            "Pushing masked dataset to '%s' on the Hugging Face Hub",
             args.output_repo,
         )
-        annotated_dataset.push_to_hub(args.output_repo, split="train")
-        logger.success("Annotated dataset pushed to '%s'", args.output_repo)
+        dataset.push_to_hub(args.output_repo, split="train")
+        logger.success("Masked dataset pushed to '%s'", args.output_repo)
 
-    return annotated_dataset
+    return dataset
 
 
 def main() -> None:
     args = parse_args()
-    annotate_dataset(args)
+    mask_dataset(args)
 
 
 if __name__ == "__main__":
