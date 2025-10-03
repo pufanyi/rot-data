@@ -94,9 +94,9 @@ def compute_batch_statistics_gpu(
 
 def process_record(
     record: dict[str, Any],
-) -> tuple[float, float, float, list[dict[str, float]]]:
+) -> tuple[str, float, float, float, list[dict[str, float]]]:
     """
-    Process a single record and return min statistics and per-image details
+    Process a single record and return record ID, min statistics and per-image details
     (CPU version).
     """
     # Collect all images
@@ -128,21 +128,29 @@ def process_record(
             }
         )
 
-    return min(areas), min(laplacian_vars), min(tenengrads), per_image_stats
+    return (
+        record["id"],
+        min(areas),
+        min(laplacian_vars),
+        min(tenengrads),
+        per_image_stats,
+    )
 
 
 def process_batch_gpu(
     records: list[dict[str, Any]], device: torch.device
-) -> list[tuple[float, float, float, list[dict[str, float]]]]:
+) -> list[tuple[str, float, float, float, list[dict[str, float]]]]:
     """Process a batch of records using GPU acceleration."""
     # Collect all images from all records
     all_images_flat = []
     record_image_counts = []
+    record_ids = []
 
     for record in records:
         images = list(record["images"]) + [record["predict_image"]]
         all_images_flat.extend(images)
         record_image_counts.append(len(images))
+        record_ids.append(record["id"])
 
     # Compute statistics on GPU in one batch
     laplacian_vars, tenengrads = compute_batch_statistics_gpu(all_images_flat, device)
@@ -150,7 +158,7 @@ def process_batch_gpu(
     # Organize results back by record
     results = []
     idx = 0
-    for count in record_image_counts:
+    for record_id, count in zip(record_ids, record_image_counts, strict=False):
         record_lap_vars = laplacian_vars[idx : idx + count]
         record_tenengrads = tenengrads[idx : idx + count]
 
@@ -175,7 +183,13 @@ def process_batch_gpu(
             )
 
         results.append(
-            (min(areas), min(record_lap_vars), min(record_tenengrads), per_image_stats)
+            (
+                record_id,
+                min(areas),
+                min(record_lap_vars),
+                min(record_tenengrads),
+                per_image_stats,
+            )
         )
         idx += count
 
@@ -197,6 +211,7 @@ def process_gpu_worker(
     # Load dataset
     dataset = datasets.load_dataset(dataset_repo, split="train")
 
+    record_ids = []
     min_areas = []
     min_laplacian_vars = []
     min_tenengrads = []
@@ -232,7 +247,14 @@ def process_gpu_worker(
         batch_results = process_batch_gpu(batch_records, device)
 
         # Collect results
-        for min_area, min_lap_var, min_tenengrad, per_image_stats in batch_results:
+        for (
+            record_id,
+            min_area,
+            min_lap_var,
+            min_tenengrad,
+            per_image_stats,
+        ) in batch_results:
+            record_ids.append(record_id)
             min_areas.append(min_area)
             min_laplacian_vars.append(min_lap_var)
             min_tenengrads.append(min_tenengrad)
@@ -244,6 +266,7 @@ def process_gpu_worker(
 
     # Store results
     return_dict[gpu_id] = {
+        "record_ids": record_ids,
         "min_areas": min_areas,
         "min_laplacian_vars": min_laplacian_vars,
         "min_tenengrads": min_tenengrads,
@@ -252,6 +275,7 @@ def process_gpu_worker(
 
 
 def save_statistics_jsonl(
+    record_ids: list[str],
     min_areas: list[float],
     min_laplacian_vars: list[float],
     min_tenengrads: list[float],
@@ -263,17 +287,16 @@ def save_statistics_jsonl(
     output_path = output_dir / "statistics.jsonl"
 
     with open(output_path, "w") as f:
-        for idx, (area, lap_var, tenengrad, image_stats) in enumerate(
-            zip(
-                min_areas,
-                min_laplacian_vars,
-                min_tenengrads,
-                all_image_stats,
-                strict=False,
-            )
+        for record_id, area, lap_var, tenengrad, image_stats in zip(
+            record_ids,
+            min_areas,
+            min_laplacian_vars,
+            min_tenengrads,
+            all_image_stats,
+            strict=False,
         ):
             record = {
-                "record_index": idx,
+                "record_index": record_id,
                 "min_area": area,
                 "min_laplacian_variance": lap_var,
                 "min_tenengrad": tenengrad,
@@ -417,6 +440,7 @@ def main() -> None:
     print(f"Loading dataset from {args.dataset_repo}...")
     dataset = datasets.load_dataset(args.dataset_repo, split="train")
 
+    record_ids: list[str] = []
     min_areas: list[float] = []
     min_laplacian_vars: list[float] = []
     min_tenengrads: list[float] = []
@@ -483,6 +507,7 @@ def main() -> None:
         # Collect results from all GPUs
         for gpu_id in range(len(processes)):
             gpu_results = return_dict[gpu_id]
+            record_ids.extend(gpu_results["record_ids"])
             min_areas.extend(gpu_results["min_areas"])
             min_laplacian_vars.extend(gpu_results["min_laplacian_vars"])
             min_tenengrads.extend(gpu_results["min_tenengrads"])
@@ -544,7 +569,14 @@ def main() -> None:
             total_gpu_time += gpu_time
 
             # Collect results
-            for min_area, min_lap_var, min_tenengrad, per_image_stats in batch_results:
+            for (
+                record_id,
+                min_area,
+                min_lap_var,
+                min_tenengrad,
+                per_image_stats,
+            ) in batch_results:
+                record_ids.append(record_id)
                 min_areas.append(min_area)
                 min_laplacian_vars.append(min_lap_var)
                 min_tenengrads.append(min_tenengrad)
@@ -594,12 +626,14 @@ def main() -> None:
                 leave=True,
             ):
                 (
+                    record_id,
                     min_area,
                     min_laplacian_var,
                     min_tenengrad,
                     per_image_stats,
                 ) = future.result()
                 with lock:
+                    record_ids.append(record_id)
                     min_areas.append(min_area)
                     min_laplacian_vars.append(min_laplacian_var)
                     min_tenengrads.append(min_tenengrad)
@@ -622,7 +656,12 @@ def main() -> None:
     # Save statistics to JSONL
     print("\nSaving statistics to JSONL...")
     save_statistics_jsonl(
-        min_areas, min_laplacian_vars, min_tenengrads, all_image_stats, args.output_dir
+        record_ids,
+        min_areas,
+        min_laplacian_vars,
+        min_tenengrads,
+        all_image_stats,
+        args.output_dir,
     )
 
     # Generate and save distribution plots

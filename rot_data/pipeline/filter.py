@@ -15,11 +15,20 @@ def get_data_info(path: Path) -> dict[str, Any]:
     return data_info
 
 
-def filter_function(record: dict[str, Any]) -> bool:
-    return True
+def filter_function(data_info: dict[str, Any]) -> bool:
+    return (
+        data_info["min_area"] >= 1.5e6
+        and data_info["min_laplacian_variance"] >= 300
+        and data_info["min_tenengrad"] >= 10000
+    )
 
 
 if __name__ == "__main__":
-    dataset = datasets.load_dataset("pufanyi/co3d-raw", split="train")
     data_info = get_data_info(Path("output/statistics/statistics.jsonl"))
-    dataset = dataset.filter(filter_function, num_proc=32)
+    print(len(data_info))
+    for k, v in data_info.items():
+        print(k, v)
+        break
+    dataset = datasets.load_dataset("pufanyi/co3d-raw", split="train")
+    dataset = dataset.filter(lambda x: filter_function(data_info[x["id"]]), num_proc=32)
+    dataset.push_to_hub("pufanyi/co3d-filtered")
