@@ -4,15 +4,17 @@ from __future__ import annotations
 
 import os
 import random
+from concurrent.futures import ThreadPoolExecutor
 
 import datasets
-from concurrent.futures import ThreadPoolExecutor
 from datasets import Image as DatasetImage
 from PIL import Image, ImageDraw
 from tqdm import tqdm
 
 
-def _clamped_normal(mean: float, std_dev: float, min_value: float, max_value: float) -> float:
+def _clamped_normal(
+    mean: float, std_dev: float, min_value: float, max_value: float
+) -> float:
     """Sample from a normal distribution and clamp the result to the desired range."""
 
     sample = random.normalvariate(mean, std_dev)
@@ -30,7 +32,10 @@ def _mask_fill_for_mode(mode: str):
 
 
 def mask_record(image: Image.Image) -> Image.Image:
-    """Apply a solid mask near the image centre with slight randomness in size and position."""
+    """
+    Apply a solid mask near the image centre with slight
+    randomness in size and position.
+    """
 
     masked = image.copy()
     width, height = masked.size
