@@ -1,7 +1,8 @@
-import datasets
 import json
 from pathlib import Path
 from typing import Any
+
+import datasets
 
 
 def get_data_info(path: Path) -> dict[str, Any]:
@@ -12,6 +13,7 @@ def get_data_info(path: Path) -> dict[str, Any]:
             _id = data["record_index"]
             data_info[_id] = data
     return data_info
+
 
 def filter_function(record: dict[str, Any]) -> bool:
     return True

@@ -75,9 +75,7 @@ def compute_batch_statistics_gpu(
         gray = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2GRAY)
 
         # Convert to torch tensor [1, 1, H, W]
-        img_tensor = (
-            torch.from_numpy(gray).float().unsqueeze(0).unsqueeze(0).to(device)
-        )
+        img_tensor = torch.from_numpy(gray).float().unsqueeze(0).unsqueeze(0).to(device)
 
         # Apply Laplacian
         laplacian = F.conv2d(img_tensor, laplacian_kernel, padding=1)
@@ -97,7 +95,10 @@ def compute_batch_statistics_gpu(
 def process_record(
     record: dict[str, Any],
 ) -> tuple[float, float, float, list[dict[str, float]]]:
-    """Process a single record and return min statistics and per-image details (CPU version)."""
+    """
+    Process a single record and return min statistics and per-image details
+    (CPU version).
+    """
     # Collect all images
     all_images = list(record["images"]) + [record["predict_image"]]
 
@@ -114,7 +115,7 @@ def process_record(
     # Build per-image details
     per_image_stats = []
     for i, (area, lap_var, tenengrad) in enumerate(
-        zip(areas, laplacian_vars, tenengrads)
+        zip(areas, laplacian_vars, tenengrads, strict=False)
     ):
         is_predict = i == len(all_images) - 1
         per_image_stats.append(
@@ -144,9 +145,7 @@ def process_batch_gpu(
         record_image_counts.append(len(images))
 
     # Compute statistics on GPU in one batch
-    laplacian_vars, tenengrads = compute_batch_statistics_gpu(
-        all_images_flat, device
-    )
+    laplacian_vars, tenengrads = compute_batch_statistics_gpu(all_images_flat, device)
 
     # Organize results back by record
     results = []
@@ -162,7 +161,7 @@ def process_batch_gpu(
         # Build per-image details
         per_image_stats = []
         for i, (area, lap_var, tenengrad) in enumerate(
-            zip(areas, record_lap_vars, record_tenengrads)
+            zip(areas, record_lap_vars, record_tenengrads, strict=False)
         ):
             is_predict = i == count - 1
             per_image_stats.append(
@@ -265,7 +264,13 @@ def save_statistics_jsonl(
 
     with open(output_path, "w") as f:
         for idx, (area, lap_var, tenengrad, image_stats) in enumerate(
-            zip(min_areas, min_laplacian_vars, min_tenengrads, all_image_stats)
+            zip(
+                min_areas,
+                min_laplacian_vars,
+                min_tenengrads,
+                all_image_stats,
+                strict=False,
+            )
         ):
             record = {
                 "record_index": idx,
@@ -549,7 +554,7 @@ def main() -> None:
 
             if args.verbose:
                 print(
-                    f"Batch {i+1}/{num_batches}: "
+                    f"Batch {i + 1}/{num_batches}: "
                     f"Load={load_time:.2f}s, GPU={gpu_time:.2f}s, "
                     f"Total={batch_total:.2f}s"
                 )
