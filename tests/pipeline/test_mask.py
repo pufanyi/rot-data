@@ -87,7 +87,11 @@ def test_annotate_dataset_builds_output(monkeypatch: pytest.MonkeyPatch) -> None
         assert len(items) == 1
         return _DummyDataset(items)
 
-    monkeypatch.setattr(mask.datasets.Dataset, "from_list", classmethod(lambda cls, items: fake_from_list(items)))
+    monkeypatch.setattr(
+        mask.datasets.Dataset,
+        "from_list",
+        classmethod(lambda cls, items: fake_from_list(items)),
+    )
 
     args = SimpleNamespace(
         dataset_repo="source/repo",

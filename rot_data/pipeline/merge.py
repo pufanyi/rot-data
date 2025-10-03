@@ -1,12 +1,14 @@
 import json
+from pathlib import Path
+
 import datasets
 from PIL import Image
-from pathlib import Path
+
 
 def dataset_generator():
     folder = Path("output")
     count = 0
-    with open("output/data.jsonl", "r") as f:
+    with open("output/data.jsonl") as f:
         for line in f:
             data = json.loads(line)
             data["images"] = [Image.open(folder / image) for image in data["images"]]

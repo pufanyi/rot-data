@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any
 
 from loguru import logger
-from PIL import Image
 
 from rot_data.dataloader.co3d import CO3DDataLoader
 from rot_data.dataloader.data import DataLoader
@@ -113,12 +112,12 @@ def save_dataset_to_jsonl(
 
         # Save images and create jsonl entries
         logger.info(f"Saving images to {images_dir} and metadata to {jsonl_path}")
-        
+
         save_task = manager.add_task(
             "[green]Saving dataset",
             total=len(items),
         )
-        
+
         with jsonl_path.open("w", encoding="utf-8") as f:
             for item in items:
                 # Save images
@@ -129,13 +128,13 @@ def save_dataset_to_jsonl(
                     img.save(img_path)
                     # Store relative path from output_dir
                     image_paths.append(f"images/{img_filename}")
-                
+
                 # Save predict image
                 predict_img_filename = f"{item['id']}_predict.jpg"
                 predict_img_path = images_dir / predict_img_filename
                 item["predict_image"].save(predict_img_path)
                 predict_img_rel_path = f"images/{predict_img_filename}"
-                
+
                 # Create jsonl entry
                 jsonl_entry = {
                     "id": item["id"],
@@ -143,10 +142,10 @@ def save_dataset_to_jsonl(
                     "images": image_paths,
                     "predict_image": predict_img_rel_path,
                 }
-                
+
                 f.write(json.dumps(jsonl_entry, ensure_ascii=False) + "\n")
                 manager.update(save_task, advance=1)
-        
+
         manager.remove_task(save_task)
 
     logger.success(f"Dataset saved with {len(items)} records to {output_path}")
