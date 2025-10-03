@@ -91,6 +91,54 @@ class YOLOBoundingBoxDetector:
             return None
 
         prediction = results[0]
+        return self._select_bbox(prediction, label)
+
+    def detect_batch(
+        self,
+        images: Sequence[Image.Image | np.ndarray],
+        labels: Sequence[str | None] | None = None,
+    ) -> list[BoundingBox | None]:
+        """Return the best bounding boxes for a batch of *images*.
+
+        The sequence of *labels* must be the same length as *images* if
+        provided. Each entry influences the selection logic in the same way as
+        :meth:`detect_bbox`.
+        """
+
+        if labels is None:
+            labels = [None] * len(images)
+        elif len(labels) != len(images):
+            raise ValueError("labels must be the same length as images")
+
+        np_images = [self._to_numpy(image) for image in images]
+
+        results = self._model.predict(
+            np_images,
+            conf=self.confidence,
+            iou=self.iou,
+            device=self.device,
+            verbose=False,
+        )
+
+        if not isinstance(results, list):
+            results = list(results)
+
+        if len(results) != len(np_images):
+            raise RuntimeError(
+                "YOLO model returned a mismatched number of predictions: "
+                f"expected {len(np_images)}, got {len(results)}"
+            )
+
+        return [
+            self._select_bbox(prediction, label)
+            for prediction, label in zip(results, labels, strict=True)
+        ]
+
+    def _select_bbox(
+        self,
+        prediction: object,
+        label: str | None,
+    ) -> BoundingBox | None:
         boxes = getattr(prediction, "boxes", None)
         if boxes is None or boxes.data is None or len(boxes) == 0:
             return None
@@ -118,7 +166,7 @@ class YOLOBoundingBoxDetector:
             return None
 
         if label is not None:
-            label_lower = label.lower()
+            label_lower = str(label).lower()
             matches = [box for box in candidates if box.label.lower() == label_lower]
             if matches:
                 return max(matches, key=lambda box: box.score)

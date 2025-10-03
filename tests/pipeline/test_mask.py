@@ -19,10 +19,10 @@ class DummyDataset:
     def __iter__(self):
         return iter(self.records)
 
-    def __len__(self) -> int:
+    def __len__(self) -> int:  # pragma: no cover - compatibility hook
         return len(self.records)
 
-    def __getitem__(self, index: int):
+    def __getitem__(self, index: int):  # pragma: no cover - compatibility hook
         return self.records[index]
 
     @property
@@ -37,28 +37,35 @@ class DummyDataset:
         self.cast_columns.append((name, feature))
         return self
 
-    def push_to_hub(self, repo: str, split: str):
+    def push_to_hub(
+        self, repo: str, split: str
+    ):  # pragma: no cover - hub is mocked out
         self.push_calls.append((repo, split))
 
 
 class DummyDetector:
-    instances: list["DummyDetector"] = []
+    instances: list[DummyDetector] = []
 
     def __init__(self, *_, **__):
-        self.calls: list[tuple[object, object]] = []
+        self.calls: list[tuple[list[Image.Image], list[str | None]]] = []
         DummyDetector.instances.append(self)
 
-    def detect_bbox(self, image, label):
-        self.calls.append((image, label))
-        return BoundingBox(
-            x_min=0,
-            y_min=0,
-            x_max=image.width,
-            y_max=image.height,
-            score=0.99,
-            label=str(label or "object"),
-            class_id=0,
-        )
+    def detect_batch(self, images, labels):
+        batch_images = list(images)
+        batch_labels = [label if label is None else str(label) for label in labels]
+        self.calls.append((batch_images, batch_labels))
+        return [
+            BoundingBox(
+                x_min=0,
+                y_min=0,
+                x_max=image.width,
+                y_max=image.height,
+                score=0.99,
+                label=label or "object",
+                class_id=0,
+            )
+            for image, label in zip(batch_images, batch_labels, strict=True)
+        ]
 
 
 class DummyImageFeature:
@@ -83,8 +90,18 @@ def test_mask_image_with_bbox_blanks_region() -> None:
 
 
 def test_mask_dataset_adds_mask_column(monkeypatch: pytest.MonkeyPatch) -> None:
-    image = Image.new("RGB", (2, 2), color=(255, 0, 0))
-    dataset = DummyDataset([{"predict_image": image, "label": "chair"}])
+    images = [
+        Image.new("RGB", (2, 2), color=(255, 0, 0)),
+        Image.new("RGB", (2, 2), color=(0, 255, 0)),
+        Image.new("RGB", (2, 2), color=(0, 0, 255)),
+    ]
+    dataset = DummyDataset(
+        [
+            {"predict_image": images[0], "label": "chair"},
+            {"predict_image": images[1], "label": "table"},
+            {"predict_image": images[2], "label": "lamp"},
+        ]
+    )
 
     DummyDetector.instances = []
     image_feature = DummyImageFeature()
@@ -97,9 +114,12 @@ def test_mask_dataset_adds_mask_column(monkeypatch: pytest.MonkeyPatch) -> None:
         dataset_repo="source/repo",
         output_repo="target/repo",
         model_path="weights.pt",
-        device=None,
+        device="cpu",
+        devices=None,
         confidence=0.25,
         iou=0.7,
+        batch_size=2,
+        num_workers=1,
         skip_push=True,
     )
 
@@ -107,10 +127,25 @@ def test_mask_dataset_adds_mask_column(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert result is dataset
     assert "masked_image" in dataset.added_columns
-    encoded_entry = dataset.added_columns["masked_image"][0]
-    assert encoded_entry["image"].getpixel((0, 0)) == (0, 0, 0)
-    assert image_feature.encoded[0].getpixel((0, 0)) == (0, 0, 0)
+    masked_column = dataset.added_columns["masked_image"]
+    assert len(masked_column) == dataset.num_rows
+    assert all(entry["image"].getpixel((0, 0)) == (0, 0, 0) for entry in masked_column)
+    assert image_feature.encoded == [entry["image"] for entry in masked_column]
     assert dataset.push_calls == []
 
-    detector = DummyDetector.instances[0]
-    assert detector.calls == [(image, "chair")]
+    assert len(DummyDetector.instances) == 1
+    calls = DummyDetector.instances[0].calls
+    assert len(calls) == 2  # one batch of two images, one batch of one image
+    assert [len(batch) for batch, _ in calls] == [2, 1]
+    assert calls[0][1] == ["chair", "table"]
+    assert calls[1][1] == ["lamp"]
+
+
+def test_resolve_devices_prefers_autodetected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(mask_yolo, "_autodetect_devices", lambda: ["cuda:0", "cuda:1"])
+    assert mask_yolo._resolve_devices(None, None) == ["cuda:0", "cuda:1"]
+
+
+def test_resolve_devices_falls_back_to_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(mask_yolo, "_autodetect_devices", lambda: [])
+    assert mask_yolo._resolve_devices(None, None) == [None]

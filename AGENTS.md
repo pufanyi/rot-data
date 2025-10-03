@@ -11,11 +11,13 @@
 - `uv run python main.py --help` surfaces available CLI actions before running them.
 - `uv run ruff check rot_data main.py` enforces import ordering, formatting, and modernization rules.
 - `uv run pytest` executes the entire test suite; pair with `-k <pattern>` for targeted runs.
+- YOLO pipelines accept larger checkpoints (e.g. YOLO11x); pass the weight via `--model-path` and scale `--batch-size`/`--devices` to match available GPUs.
 
 ## Coding Style & Naming Conventions
 - Follow PEP 8 with 4-space indentation, snake_case for functions and modules, and PascalCase for classes such as `CO3DDataLoader`.
 - Keep modules cohesive and favour pure helpers in `rot_data/utils.py`; annotate public APIs with typing hints and lightweight docstrings when behaviour is non-obvious.
 - Run Ruff before committing to auto-fix import order (`ruff --fix --select I,UP` if needed).
+- Loguru prefers f-string formatting; use `logger.info(f"Masked dataset pushed to {repo}")` instead of `%s`.
 
 ## Testing Guidelines
 - Use `pytest` for unit coverage; name files `test_<module>.py` and mark async flows with `@pytest.mark.asyncio`.
