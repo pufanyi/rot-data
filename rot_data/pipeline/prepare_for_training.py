@@ -1,8 +1,22 @@
-from tkinter import image_names
-import datasets
+import json
 from pathlib import Path
 
+import datasets
+import tqdm
+from PIL import Image
+
 DATASET = "pufanyi/co3d"
+
+TEMPLATE = """\
+<image><image><image> You are given {num_views} camera views of the same scene. \
+The last image has a black masked part. Please generate the \
+last image and complete the black part.
+"""
+
+
+def save_image(image: Image.Image, folder: Path, path: str):
+    image.save(folder / path)
+    return path
 
 
 if __name__ == "__main__":
@@ -11,11 +25,32 @@ if __name__ == "__main__":
     folder.mkdir(exist_ok=True, parents=True)
     jsonl_data_path = Path(folder, "data.jsonl")
     image_folder = Path(folder, "images")
+    image_folder.mkdir(exist_ok=True, parents=True)
+
     with open(jsonl_data_path, "w") as f:
-        for item in dataset:
+        for i, item in enumerate(tqdm.tqdm(dataset, desc="Processing dataset")):
             raw_data: dict = item
-            # {'id': '444_63769_125899', 'label': 'apple', 'images': [<PIL.JpegImagePlugin.JpegImageFile image mode=RGB size=704x1253 at 0x7F9EFACE4B90>, <PIL.JpegImagePlugin.JpegImageFile image mode=RGB size=704x1253 at 0x7F9EFACE4F50>], 'predict_image': <PIL.JpegImagePlugin.JpegImageFile image mode=RGB size=704x1253 at 0x7F9EFA3675C0>, 'masked_image': <PIL.PngImagePlugin.PngImageFile image mode=RGB size=704x1253 at 0x7F9EFAD20050>}
             item_id = raw_data["id"]
-            image_names = [ f"{item_id}_{j}.jpg" for j in range(len(raw_data["images"])) ]
-            print(item_id, image_names)
-            
+            image_names = [
+                save_image(img, image_folder, f"{item_id}_{j}.jpg")
+                for j, img in enumerate(raw_data["images"])
+            ]
+            masked_image_name = save_image(
+                raw_data["masked_image"], image_folder, f"{item_id}_masked.jpg"
+            )
+            predict_image_name = save_image(
+                raw_data["predict_image"], image_folder, f"{item_id}_predict.jpg"
+            )
+            final_data = {
+                "id": i,
+                "conversations": [
+                    {
+                        "from": "human",
+                        "value": TEMPLATE.format(num_views=len(image_names)),
+                    },
+                    {"from": "gpt", "value": "<image>"},
+                ],
+                "image": image_names + [masked_image_name, predict_image_name],
+            }
+            output_line = json.dumps(final_data)
+            f.write(output_line + "\n")

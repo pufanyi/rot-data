@@ -185,9 +185,7 @@ def _expand_mask_for_strict_overlap(
         updated = False
 
         if overlap_width < bbox_width and adjusted_width < image_width:
-            needed_width = math.ceil(
-                required_overlap / max(1, overlap_height)
-            )
+            needed_width = math.ceil(required_overlap / max(1, overlap_height))
             new_width = min(image_width, max(adjusted_width, needed_width))
             if new_width != adjusted_width:
                 adjusted_width = new_width
@@ -199,9 +197,7 @@ def _expand_mask_for_strict_overlap(
             break
 
         if overlap_height < bbox_height and adjusted_height < image_height:
-            needed_height = math.ceil(
-                required_overlap / max(1, overlap_width)
-            )
+            needed_height = math.ceil(required_overlap / max(1, overlap_width))
             new_height = min(image_height, max(adjusted_height, needed_height))
             if new_height != adjusted_height:
                 adjusted_height = new_height
