@@ -160,7 +160,7 @@ def _resolve_devices(devices_arg: str | None, device: str | None) -> list[str | 
     return [None]
 
 
-def _chunk_records(dataset: Iterable[dict[str, Any]], batch_size: int):
+def _chunk_records(dataset: Iterable, batch_size: int):
     batch: list[dict[str, Any]] = []
     for record in dataset:
         batch.append(record)
@@ -198,6 +198,8 @@ def mask_dataset(args: argparse.Namespace) -> datasets.Dataset:
 
     logger.info(f"Loading dataset {args.dataset_repo!r} from the Hugging Face Hub")
     dataset = datasets.load_dataset(args.dataset_repo, split="train")
+    if not isinstance(dataset, datasets.Dataset):
+        raise RuntimeError("Expected a single dataset split, got a DatasetDict")
 
     devices = _resolve_devices(args.devices, args.device)
     num_workers = args.num_workers or len(devices)
