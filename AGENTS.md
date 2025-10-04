@@ -10,7 +10,6 @@
 - `uv sync` installs locked dependencies from `pyproject.toml` and `uv.lock`.
 - `uv run python main.py --help` surfaces available CLI actions before running them.
 - `uv run ruff check rot_data main.py` enforces import ordering, formatting, and modernization rules.
-- `uv run pytest` executes the entire test suite; pair with `-k <pattern>` for targeted runs.
 - YOLO pipelines accept larger checkpoints (e.g. YOLO11x); pass the weight via `--model-path` and scale `--batch-size`/`--devices` to match available GPUs.
 
 ## Coding Style & Naming Conventions

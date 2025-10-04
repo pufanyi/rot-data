@@ -5,8 +5,9 @@ from __future__ import annotations
 import argparse
 import math
 import threading
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from queue import Queue
+from random import Random
 from typing import Any
 
 import datasets
@@ -24,13 +25,10 @@ DEFAULT_MODEL_PATH = "yolo11x.pt"
 MASK_MIN_RATIO = 0.25
 MASK_MAX_RATIO = 0.35
 MASK_DEFAULT_RATIO = 0.3
-MASK_RATIO_CANDIDATES = (
-    MASK_DEFAULT_RATIO,
-    0.28,
-    0.33,
-    MASK_MIN_RATIO,
-    MASK_MAX_RATIO,
-)
+MASK_RATIO_STDDEV = (MASK_MAX_RATIO - MASK_MIN_RATIO) / 6
+MASK_RATIO_SAMPLE_COUNT = 10
+
+_ratio_rng = Random()
 
 
 def parse_args() -> argparse.Namespace:
@@ -152,6 +150,21 @@ def _compute_mask_dimensions(
         current_ratio = mask_ratio()
 
     return mask_width, mask_height, current_ratio
+
+
+def _iter_mask_ratios(rng: Random | None = None) -> Iterator[float]:
+    """Yield candidate mask area ratios sampled from a truncated normal distribution."""
+
+    generator = rng or _ratio_rng
+
+    for _ in range(MASK_RATIO_SAMPLE_COUNT):
+        sample = generator.normalvariate(MASK_DEFAULT_RATIO, MASK_RATIO_STDDEV)
+        yield max(MASK_MIN_RATIO, min(MASK_MAX_RATIO, sample))
+
+    # Deterministic fallbacks to guarantee coverage if random draws fail.
+    yield MASK_DEFAULT_RATIO
+    yield MASK_MIN_RATIO
+    yield MASK_MAX_RATIO
 
 
 def _candidate_positions(
@@ -291,7 +304,7 @@ def mask_image_with_bbox(image: Image.Image, bbox: BoundingBox | None) -> Image.
         # )
         return masked
 
-    for ratio in MASK_RATIO_CANDIDATES:
+    for ratio in _iter_mask_ratios():
         mask_width, mask_height, _ = _compute_mask_dimensions(width, height, ratio)
         if mask_width == 0 or mask_height == 0:
             continue
