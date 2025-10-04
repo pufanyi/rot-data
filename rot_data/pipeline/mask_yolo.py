@@ -21,13 +21,13 @@ from rot_data.pipeline.mask import mask_record
 DATASET_REPO_ID = "pufanyi/co3d-filtered"
 OUTPUT_REPO_ID = "pufanyi/co3d-masked-yolo"
 DEFAULT_MODEL_PATH = "yolo11x.pt"
-MASK_MIN_RATIO = 0.3
-MASK_MAX_RATIO = 0.4
-MASK_DEFAULT_RATIO = 0.35
+MASK_MIN_RATIO = 0.25
+MASK_MAX_RATIO = 0.35
+MASK_DEFAULT_RATIO = 0.3
 MASK_RATIO_CANDIDATES = (
     MASK_DEFAULT_RATIO,
-    0.32,
-    0.38,
+    0.28,
+    0.33,
     MASK_MIN_RATIO,
     MASK_MAX_RATIO,
 )
