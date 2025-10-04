@@ -212,3 +212,4 @@ output/
 # Local model weights
 yolo11x.pt
 rot_data/models/yolo11x.pt
+data/

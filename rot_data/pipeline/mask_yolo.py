@@ -22,9 +22,9 @@ from rot_data.pipeline.mask import mask_record
 DATASET_REPO_ID = "pufanyi/co3d-filtered"
 OUTPUT_REPO_ID = "pufanyi/co3d-masked-yolo"
 DEFAULT_MODEL_PATH = "yolo11x.pt"
-MASK_MIN_RATIO = 0.25
-MASK_MAX_RATIO = 0.35
-MASK_DEFAULT_RATIO = 0.3
+MASK_MIN_RATIO = 0.10
+MASK_MAX_RATIO = 0.25
+MASK_DEFAULT_RATIO = 0.18
 MASK_RATIO_STDDEV = (MASK_MAX_RATIO - MASK_MIN_RATIO) / 6
 MASK_RATIO_SAMPLE_COUNT = 10
 
@@ -152,6 +152,67 @@ def _compute_mask_dimensions(
     return mask_width, mask_height, current_ratio
 
 
+def _expand_mask_for_strict_overlap(
+    mask_width: int,
+    mask_height: int,
+    image_width: int,
+    image_height: int,
+    bbox_width: int,
+    bbox_height: int,
+) -> tuple[int, int]:
+    """Ensure the mask can overlap at least half of the bounding box area."""
+
+    if bbox_width <= 0 or bbox_height <= 0:
+        return mask_width, mask_height
+
+    required_overlap = math.ceil(bbox_width * bbox_height * 0.5)
+    if required_overlap <= 0:
+        return mask_width, mask_height
+
+    adjusted_width = mask_width
+    adjusted_height = mask_height
+
+    for _ in range(5):
+        overlap_width = min(adjusted_width, bbox_width)
+        overlap_height = min(adjusted_height, bbox_height)
+
+        if overlap_width <= 0 or overlap_height <= 0:
+            break
+
+        if overlap_width * overlap_height >= required_overlap:
+            break
+
+        updated = False
+
+        if overlap_width < bbox_width and adjusted_width < image_width:
+            needed_width = math.ceil(
+                required_overlap / max(1, overlap_height)
+            )
+            new_width = min(image_width, max(adjusted_width, needed_width))
+            if new_width != adjusted_width:
+                adjusted_width = new_width
+                updated = True
+
+        overlap_width = min(adjusted_width, bbox_width)
+        overlap_height = min(adjusted_height, bbox_height)
+        if overlap_width * overlap_height >= required_overlap:
+            break
+
+        if overlap_height < bbox_height and adjusted_height < image_height:
+            needed_height = math.ceil(
+                required_overlap / max(1, overlap_width)
+            )
+            new_height = min(image_height, max(adjusted_height, needed_height))
+            if new_height != adjusted_height:
+                adjusted_height = new_height
+                updated = True
+
+        if not updated:
+            break
+
+    return adjusted_width, adjusted_height
+
+
 def _iter_mask_ratios(rng: Random | None = None) -> Iterator[float]:
     """Yield candidate mask area ratios sampled from a truncated normal distribution."""
 
@@ -160,11 +221,6 @@ def _iter_mask_ratios(rng: Random | None = None) -> Iterator[float]:
     for _ in range(MASK_RATIO_SAMPLE_COUNT):
         sample = generator.normalvariate(MASK_DEFAULT_RATIO, MASK_RATIO_STDDEV)
         yield max(MASK_MIN_RATIO, min(MASK_MAX_RATIO, sample))
-
-    # Deterministic fallbacks to guarantee coverage if random draws fail.
-    yield MASK_DEFAULT_RATIO
-    yield MASK_MIN_RATIO
-    yield MASK_MAX_RATIO
 
 
 def _candidate_positions(
@@ -304,10 +360,25 @@ def mask_image_with_bbox(image: Image.Image, bbox: BoundingBox | None) -> Image.
         # )
         return masked
 
+    bbox_width = bbox_right - bbox_left
+    bbox_height = bbox_bottom - bbox_top
+
+    if bbox_width <= 0 or bbox_height <= 0:
+        return masked
+
     for ratio in _iter_mask_ratios():
         mask_width, mask_height, _ = _compute_mask_dimensions(width, height, ratio)
         if mask_width == 0 or mask_height == 0:
             continue
+
+        mask_width, mask_height = _expand_mask_for_strict_overlap(
+            mask_width,
+            mask_height,
+            width,
+            height,
+            bbox_width,
+            bbox_height,
+        )
 
         result = _find_mask_bounds(
             width,
