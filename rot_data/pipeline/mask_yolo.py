@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import threading
 from collections.abc import Iterable, Sequence
 from queue import Queue
@@ -20,6 +21,16 @@ from rot_data.pipeline.mask import mask_record
 DATASET_REPO_ID = "pufanyi/co3d-filtered"
 OUTPUT_REPO_ID = "pufanyi/co3d-masked-yolo"
 DEFAULT_MODEL_PATH = "yolo11x.pt"
+MASK_MIN_RATIO = 0.3
+MASK_MAX_RATIO = 0.4
+MASK_DEFAULT_RATIO = 0.35
+MASK_RATIO_CANDIDATES = (
+    MASK_DEFAULT_RATIO,
+    0.32,
+    0.38,
+    MASK_MIN_RATIO,
+    MASK_MAX_RATIO,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -98,6 +109,168 @@ def _clamp(value: int, minimum: int, maximum: int) -> int:
     return max(minimum, min(value, maximum))
 
 
+def _compute_mask_dimensions(
+    width: int,
+    height: int,
+    target_ratio: float,
+) -> tuple[int, int, float]:
+    """Return mask dimensions that respect the target area ratio constraints."""
+
+    ratio = max(MASK_MIN_RATIO, min(MASK_MAX_RATIO, target_ratio))
+    if width <= 0 or height <= 0:
+        return 0, 0, 0.0
+
+    image_area = width * height
+    scale = math.sqrt(ratio)
+    mask_width = max(1, min(width, int(round(width * scale))))
+    mask_height = max(1, min(height, int(round(height * scale))))
+
+    def mask_ratio() -> float:
+        return (mask_width * mask_height) / image_area
+
+    current_ratio = mask_ratio()
+
+    # Expand if rounding shrank the area below the lower bound.
+    while current_ratio < MASK_MIN_RATIO and (
+        mask_width < width or mask_height < height
+    ):
+        if mask_width < width:
+            mask_width += 1
+        if mask_height < height and mask_ratio() < MASK_MIN_RATIO:
+            mask_height += 1
+        current_ratio = mask_ratio()
+
+    # Shrink if rounding inflated the area beyond the upper bound.
+    while current_ratio > MASK_MAX_RATIO and (mask_width > 1 or mask_height > 1):
+        if mask_width > 1:
+            mask_width -= 1
+            current_ratio = mask_ratio()
+            if current_ratio <= MASK_MAX_RATIO:
+                break
+        if mask_height > 1:
+            mask_height -= 1
+        current_ratio = mask_ratio()
+
+    return mask_width, mask_height, current_ratio
+
+
+def _candidate_positions(
+    start: int,
+    end: int,
+    mask_extent: int,
+    limit: int,
+) -> set[int]:
+    """Generate plausible mask offsets along a single axis."""
+
+    if limit <= 0:
+        return {0}
+
+    span = max(0, end - start)
+    candidates: set[int] = set()
+    centres = (
+        (start + end - mask_extent) // 2,
+        start,
+        end - mask_extent,
+        start + max(1, span // 4),
+        end - mask_extent - max(1, span // 4),
+    )
+    for base in centres:
+        candidates.add(_clamp(base, 0, limit))
+
+    step_extent = max(1, mask_extent // 6)
+    for offset in range(-mask_extent, mask_extent + 1, step_extent):
+        candidates.add(_clamp((start + end - mask_extent) // 2 + offset, 0, limit))
+
+    step_span = max(1, max(span // 3, 1))
+    for offset in range(-span, span + 1, step_span):
+        candidates.add(_clamp(start + offset, 0, limit))
+        candidates.add(_clamp(end - mask_extent + offset, 0, limit))
+
+    # Ensure boundary positions are always considered.
+    candidates.add(0)
+    candidates.add(limit)
+    return candidates
+
+
+def _find_mask_bounds(
+    image_width: int,
+    image_height: int,
+    mask_width: int,
+    mask_height: int,
+    bbox_left: int,
+    bbox_top: int,
+    bbox_right: int,
+    bbox_bottom: int,
+) -> tuple[tuple[int, int, int, int], bool] | None:
+    bbox_width = bbox_right - bbox_left
+    bbox_height = bbox_bottom - bbox_top
+    if bbox_width <= 0 or bbox_height <= 0:
+        return None
+
+    bbox_area = bbox_width * bbox_height
+    if bbox_area <= 1:
+        return None
+
+    mask_area = mask_width * mask_height
+    if mask_area <= 0:
+        return None
+
+    strict_overlap = math.ceil(bbox_area * 0.5)
+    max_overlap = min(mask_area, bbox_area - 1)
+    if max_overlap <= 0:
+        return None
+
+    required_overlap = min(strict_overlap, max_overlap)
+
+    limit_x = max(0, image_width - mask_width)
+    limit_y = max(0, image_height - mask_height)
+
+    left_candidates = _candidate_positions(bbox_left, bbox_right, mask_width, limit_x)
+    top_candidates = _candidate_positions(bbox_top, bbox_bottom, mask_height, limit_y)
+
+    target_overlap = min(
+        max_overlap,
+        max(required_overlap, int(round(bbox_area * 0.75))),
+    )
+
+    best_bounds: tuple[int, int, int, int] | None = None
+    best_diff: float | None = None
+    best_overlap = -1
+
+    for left in left_candidates:
+        right = min(image_width, left + mask_width)
+        for top in top_candidates:
+            bottom = min(image_height, top + mask_height)
+
+            overlap_width = min(bbox_right, right) - max(bbox_left, left)
+            if overlap_width <= 0:
+                continue
+            overlap_height = min(bbox_bottom, bottom) - max(bbox_top, top)
+            if overlap_height <= 0:
+                continue
+
+            overlap_area = overlap_width * overlap_height
+            if overlap_area < required_overlap or overlap_area >= bbox_area:
+                continue
+
+            diff = abs(overlap_area - target_overlap)
+            if (
+                best_bounds is None
+                or diff < (best_diff or float("inf"))
+                or (diff == best_diff and overlap_area > best_overlap)
+            ):
+                best_bounds = (left, top, right, bottom)
+                best_diff = diff
+                best_overlap = overlap_area
+
+    if best_bounds is None:
+        return None
+
+    meets_strict_requirement = best_overlap >= strict_overlap
+
+    return best_bounds, meets_strict_requirement
+
+
 def mask_image_with_bbox(image: Image.Image, bbox: BoundingBox | None) -> Image.Image:
     """Return *image* with the YOLO bounding box region filled using a solid mask."""
 
@@ -107,21 +280,52 @@ def mask_image_with_bbox(image: Image.Image, bbox: BoundingBox | None) -> Image.
         return masked
 
     width, height = masked.size
-    left = _clamp(bbox.x_min, 0, width)
-    top = _clamp(bbox.y_min, 0, height)
-    right = _clamp(bbox.x_max, 0, width)
-    bottom = _clamp(bbox.y_max, 0, height)
+    bbox_left = _clamp(bbox.x_min, 0, width)
+    bbox_top = _clamp(bbox.y_min, 0, height)
+    bbox_right = _clamp(bbox.x_max, 0, width)
+    bbox_bottom = _clamp(bbox.y_max, 0, height)
 
-    if left >= right or top >= bottom:
-        logger.debug(
-            f"Discarding degenerate bbox ({bbox}) for image sized {width}x{height}"
-        )
+    if bbox_left >= bbox_right or bbox_top >= bbox_bottom:
+        # logger.debug(
+        #     f"Discarding degenerate bbox ({bbox}) for image sized {width}x{height}"
+        # )
         return masked
 
-    draw = ImageDraw.Draw(masked)
-    draw.rectangle(
-        [left, top, right - 1, bottom - 1],
-        fill=_mask_fill_for_mode(masked.mode),
+    for ratio in MASK_RATIO_CANDIDATES:
+        mask_width, mask_height, _ = _compute_mask_dimensions(width, height, ratio)
+        if mask_width == 0 or mask_height == 0:
+            continue
+
+        result = _find_mask_bounds(
+            width,
+            height,
+            mask_width,
+            mask_height,
+            bbox_left,
+            bbox_top,
+            bbox_right,
+            bbox_bottom,
+        )
+        if result is None:
+            continue
+
+        bounds, meets_strict = result
+        left, top, right, bottom = bounds
+        draw = ImageDraw.Draw(masked)
+        draw.rectangle(
+            [left, top, right - 1, bottom - 1],
+            fill=_mask_fill_for_mode(masked.mode),
+        )
+        # if not meets_strict:
+        #     logger.debug(
+        #         "Applied best-effort mask that covers less than half of bounding "
+        #         f"box area for bbox {bbox}"
+        #     )
+        return masked
+
+    logger.warning(
+        "Unable to satisfy mask constraints for bbox "
+        f"{bbox} on image sized {width}x{height}; skipping targeted mask"
     )
     return masked
 
